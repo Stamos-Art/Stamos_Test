@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="card">
+            <div class="card-header bg-white py-3">
+                <h4 class="mb-0">Δημιουργία Νέας Ζήτησης (RFQ)</h4>
+            </div>
+            <div class="card-body">
+                <form method="post" id="rfqForm">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Τίτλος Ζήτησης <span class="text-danger">*</span></label>
+                            <input type="text" name="title" class="form-control" required placeholder="π.χ. Προμήθεια Υλικών">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Έργο / Κέντρο Κόστους <span class="text-danger">*</span></label>
+                            <select name="cost_center" id="cost_center_select" class="form-select select2" required>
+                                <option value="">Επιλογή έργου...</option>
+                                {% for cc in cost_centers %}
+                                <option value="{{ cc.id }}" 
+                                        data-addr="{{ cc.address or '' }}" 
+                                        data-manager="{{ cc.receiving_manager or '' }}" 
+                                        data-phone="{{ cc.phone or '' }}">
+                                    {{ cc.code }} - {{ cc.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <h6 class="text-muted mt-4 mb-3">Στοιχεία Παράδοσης </h6>
+                    <div class="row mb-3 g-3 bg-light p-3 rounded border">
+                        <div class="col-md-12">
+                             <label class="form-label">Τόπος Παράδοσης</label>
+                             <input type="text" name="delivery_location" id="delivery_location" class="form-control" placeholder="Διεύθυνση / Αποθήκη">
+                        </div>
+                        <div class="col-md-6">
+                             <label class="form-label">Υπεύθυνος Παραλαβής</label>
+                             <input type="text" name="receiving_manager" id="receiving_manager" class="form-control" placeholder="Ονοματεπώνυμο">
+                        </div>
+                        <div class="col-md-6">
+                             <label class="form-label">Τηλέφωνο Επικοινωνίας</label>
+                             <input type="text" name="phone" id="phone" class="form-control" placeholder="π.χ. 210...">
+                        </div>
+                        <div class="col-12 text-muted small">
+                            <i class="bi bi-info-circle"></i> Μπορείτε να τροποποιήσετε αυτά τα στοιχεία αποκλειστικά για αυτήν την παραγγελία, χωρίς να αλλάξουν τα μόνιμα στοιχεία του Έργου.
+                        </div>
+                    </div>
+
+                    <div class="row mb-4 mt-4">
+                        <div class="col-md-6">
+                            <label class="form-label">Προθεσμία Υποβολής</label>
+                            <input type="date" name="submit_deadline" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Επιθυμητή Παράδοση</label>
+                            <input type="date" name="delivery_deadline" class="form-control" required>
+                        </div>
+                    </div>
+
+                    <h5 class="border-bottom pb-2 mb-3">Είδη προς Προμήθεια</h5>
+                    <div id="itemsContainer">
+                        <div class="row g-2 mb-2 item-row align-items-center">
+                            <div class="col-md-5">
+                                <input type="text" name="item_desc[]" class="form-control" placeholder="Περιγραφή είδους" required>
+                            </div>
+                            <div class="col-md-3">
+                                <select name="item_unit[]" class="form-select" required>
+                                    <option value="">Επιλογή...</option>
+                                    {% for u in ['τμχ', 'm', 'kg', 'tn', 'σετ', 'κουτί', 'λίτρα', 'm2', 'm3', 'παλέτα'] %}
+                                    <option value="{{ u }}">{{ u }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <input type="number" step="0.01" name="item_qty[]" class="form-control" placeholder="Ποσότητα" required>
+                            </div>
+                            <div class="col-md-1">
+                                </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-secondary mb-4" onclick="addItemRow()">
+                        <i class="bi bi-plus-circle"></i> Προσθήκη Γραμμής
+                    </button>
+
+                    <div class="mb-3">
+                        <label class="form-label">Λεπτομέρειες / Σχόλια</label>
+                        <textarea name="details" class="form-control" rows="3"></textarea>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label d-block">Απαιτούμενα Δικαιολογητικά</label>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="docs[]" value="tech_specs" id="d1">
+                            <label class="form-check-label" for="d1">Τεχνικές Προδιαγραφές</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="docs[]" value="iso" id="d2">
+                            <label class="form-check-label" for="d2">ISO</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="docs[]" value="warranty" id="d3">
+                            <label class="form-check-label" for="d3">Εγγύηση</label>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Επιλογή Προμηθευτών <span class="text-danger">*</span></label>
+                        <select name="suppliers[]" class="form-select select2" multiple required>
+                            {% for u, n in suppliers %}
+                            <option value="{{ u }}">{{ n }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <hr>
+                    <div class="d-flex justify-content-end gap-2">
+                        <a href="{{ url_for('company_dashboard') }}" class="btn btn-light">Ακύρωση</a>
+                        <button type="submit" class="btn btn-primary px-4">Δημιουργία Ζήτησης</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Το document.addEventListener περιμένει να φορτώσουν όλα τα αρχεία (και το jQuery)
+document.addEventListener("DOMContentLoaded", function() {
+    
+    // Όταν αλλάζει η επιλογή στο Έργο...
+    $('#cost_center_select').on('change', function() {
+        var selectedOption = $(this).find('option:selected');
+        
+        // Παίρνουμε τα δεδομένα
+        var addr = selectedOption.attr('data-addr');
+        var manager = selectedOption.attr('data-manager');
+        var phone = selectedOption.attr('data-phone');
+
+        // Τα βάζουμε στα πεδία
+        $('#delivery_location').val(addr || '');
+        $('#receiving_manager').val(manager || '');
+        $('#phone').val(phone || '');
+    });
+
+});
+
+// Η συνάρτηση για την προσθήκη νέας γραμμής
+function addItemRow() {
+    const html = `
+    <div class="row g-2 mb-2 item-row align-items-center">
+        <div class="col-md-5">
+            <input type="text" name="item_desc[]" class="form-control" placeholder="Περιγραφή είδους" required>
+        </div>
+        <div class="col-md-3">
+            <select name="item_unit[]" class="form-select" required>
+                <option value="">Επιλογή...</option>
+                <option value="τμχ">τμχ</option>
+                <option value="m">m</option>
+                <option value="kg">kg</option>
+                <option value="tn">tn</option>
+                <option value="σετ">σετ</option>
+                <option value="κουτί">κουτί</option>
+                <option value="λίτρα">λίτρα</option>
+                <option value="m2">m2</option>
+                <option value="m3">m3</option>
+                <option value="παλέτα">παλέτα</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <input type="number" step="0.01" name="item_qty[]" class="form-control" placeholder="Ποσότητα" required>
+        </div>
+        <div class="col-md-1">
+            <button type="button" class="btn btn-outline-danger border-0" onclick="this.closest('.item-row').remove()"><i class="bi bi-trash"></i></button>
+        </div>
+    </div>`;
+    document.getElementById('itemsContainer').insertAdjacentHTML('beforeend', html);
+}
+</script>
+{% endblock %}

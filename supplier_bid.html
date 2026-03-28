@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>.rfq-done td{ text-decoration-line: line-through; text-decoration-color:#000; text-decoration-thickness:2px; }</style>
+
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-body p-4">
+    <h4 class="mb-3 text-center">Υποβολή Προσφοράς</h4>
+
+    <div class="border rounded-3 p-3 mb-4 bg-light">
+      <div class="row g-3">
+        <div class="col-12 mb-2">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            {% if rfq.submit_deadline %}
+              <span class="badge rounded-pill text-bg-primary py-2 px-3"><i class="bi bi-calendar-event me-1"></i> Προθεσμία: <strong>{{ rfq.submit_deadline.strftime('%d/%m/%Y') }}</strong></span>
+            {% endif %}
+            {% if rfq.delivery_deadline %}
+              <span class="badge rounded-pill text-bg-info py-2 px-3"><i class="bi bi-truck me-1"></i> Παράδοση: <strong>{{ rfq.delivery_deadline.strftime('%d/%m/%Y') }}</strong></span>
+            {% endif %}
+            {% if rfq.delivery_location %}
+              <span class="badge rounded-pill text-bg-success py-2 px-3"><i class="bi bi-geo-alt me-1"></i> Τόπος: <strong>{{ rfq.delivery_location }}</strong></span>
+            {% endif %}
+            <span class="badge rounded-pill text-bg-secondary py-2 px-3">RFQ #{{ rfq.id }}</span>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="fw-semibold text-muted">Τίτλος Ζήτησης</div>
+          <div class="fs-5">{{ rfq.title }}</div>
+          <div class="mt-2 text-muted small">{{ rfq.description }}</div>
+        </div>
+      </div>
+    </div>
+
+    <form method="post" id="bid-form">
+      <h5 class="mb-3">Τιμολόγηση Ειδών</h5>
+      <div class="table-responsive">
+        <table id="price-table" class="table table-sm align-middle table-bordered">
+          <thead class="table-light">
+            <tr>
+              <th style="width:60px">#</th>
+              <th>Περιγραφή</th>
+              <th class="text-end" style="width:100px">Ποσότητα</th>
+              <th style="width:80px">Μον.</th>
+              <th class="text-end" style="width:130px">Τιμή/μον. (€)</th>
+              <th class="text-end" style="width:100px">Έκπτωση %</th>
+              <th class="text-end" style="width:130px">Σύνολο</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in rfq.items %}
+            <tr data-line="rfq" data-it="{{ it.id }}" data-qty="{{ '%.4f'|format(it.quantity) }}">
+              <td class="text-muted">{{ loop.index }}</td>
+              <td>{{ it.description }}</td>
+              <td class="text-end pe-3">{{ '%.2f'|format(it.quantity) }}</td>
+              <td>{{ it.unit or '-' }}</td>
+              <td class="text-end">
+                <input type="number" step="0.01" min="0" class="price form-control form-control-sm text-end" name="item_price_{{ it.id }}" value="{{ ('%.2f'|format(item_prefill[it.id]['price'])) if item_prefill and item_prefill.get(it.id) else '' }}" {{ "disabled" if readonly else "" }} placeholder="0.00" oninput="recalcFix()">
+              </td>
+              <td class="text-end">
+                <input type="number" step="0.01" min="0" max="100" class="disc form-control form-control-sm text-end" name="item_discount_{{ it.id }}" value="{{ ('%.2f'|format(item_prefill[it.id]['disc'])) if item_prefill and item_prefill.get(it.id) else '' }}" {{ "disabled" if readonly else "" }} placeholder="0" oninput="recalcFix()">
+              </td>
+              <td class="text-end fw-bold"><span class="line-total">0.00</span> €</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="row mt-4 mb-3">
+        <div class="col-sm-4">
+          <label class="form-label">Συνολική έκπτωση (%)</label>
+          <input type="number" step="0.01" min="0" max="100" name="overall_discount_pct" class="form-control text-end calc" value="{{ overall_prefill if overall_prefill is not none else '' }}" {{ "disabled" if readonly else "" }} placeholder="0" oninput="recalcFix()">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Μεταφορικά (€)</label>
+          <input type="number" step="0.01" min="0" name="shipping_cost" class="form-control text-end calc" value="{{ shipping_prefill if shipping_prefill is not none else '' }}" {{ "disabled" if readonly else "" }} placeholder="0.00" oninput="recalcFix()">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">ΦΠΑ (%)</label>
+          <select class="form-select calc" name="vat_pct" data-prefill="{{ vat_pct_prefill or 24 }}" {{ "disabled" if readonly else "" }} onchange="recalcFix()">
+            <option value="24">24%</option>
+            <option value="13">13%</option>
+            <option value="6">6%</option>
+            <option value="0">0%</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-2">
+        <div class="col-md-3"><div class="border rounded-3 p-3 bg-light"><div class="small text-muted">Συνολική έκπτωση</div><div class="fs-5"><span id="sum-discount">0.00</span> €</div></div></div>
+        <div class="col-md-3"><div class="border rounded-3 p-3 bg-light"><div class="small text-muted">Μεταφορικά</div><div class="fs-5"><span id="sum-shipping">0.00</span> €</div></div></div>
+        <div class="col-md-3"><div class="border rounded-3 p-3 bg-light"><div class="small text-muted">ΦΠΑ</div><div class="fs-5"><span id="sum-vat">0.00</span> €</div></div></div>
+      </div>
+
+      <div class="d-flex align-items-center justify-content-end mt-4 p-3 bg-light border rounded">
+        <div class="me-3 fs-5 fw-semibold text-muted">Τελικό Σύνολο Προσφοράς:</div>
+        <div class="display-6 text-primary fw-bold"><span id="sum-grand">0.00</span> €</div>
+      </div>
+
+      <div class="mt-4">
+        <label class="form-label">Σχόλια (προαιρετικά)</label>
+        <textarea class="form-control" name="notes" rows="3" {{ "disabled" if readonly else "" }} placeholder="Πρόσθετοι όροι, παρατηρήσεις..."></textarea>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button class="btn btn-primary btn-lg px-5" name="action" value="submit" {{ "disabled" if readonly else "" }}>Υποβολή Προσφοράς</button>
+        {% if readonly %}<div class="text-danger ms-3 align-self-center">Η επεξεργασία είναι κλειδωμένη λόγω ανάθεσης.</div>{% endif %}
+        <a class="btn btn-link btn-lg" href="{{ url_for('supplier_dashboard') }}">Άκυρο</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function N(x){ const v = parseFloat((x ?? '').toString().replace(',', '.')); return isNaN(v) ? 0 : v; }
+function F(x){ return (Math.round(x*100)/100).toFixed(2); }
+
+function recalcFix(){
+  let subtotal = 0;
+  
+  // Υπολογισμός ανά γραμμή
+  document.querySelectorAll('#price-table tr[data-line="rfq"]').forEach(tr => {
+    const qty = N(tr.getAttribute('data-qty'));
+    const price = N(tr.querySelector('input.price')?.value);
+    const disc = N(tr.querySelector('input.disc')?.value);
+    const total = qty * price * (1 - disc/100);
+    const span = tr.querySelector('.line-total');
+    if (span) span.textContent = F(total);
+    subtotal += total;
+  });
+
+  // Υπολογισμός συνόλων
+  const overallPct = N(document.querySelector('input[name="overall_discount_pct"]')?.value);
+  const shipping   = N(document.querySelector('input[name="shipping_cost"]')?.value);
+  const vatSel     = document.querySelector('select[name="vat_pct"]');
+  const vat        = vatSel ? N(vatSel.value) : 0;
+
+  const overallAmt = subtotal * (overallPct/100);
+  const vatBase    = subtotal - overallAmt;
+  const vatAmt     = (vatBase + shipping) * (vat/100);
+  const grand      = vatBase + shipping + vatAmt;
+
+  // Ενημέρωση UI
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = F(v); };
+  setTxt('sum-discount', overallAmt);
+  setTxt('sum-shipping', shipping);
+  setTxt('sum-vat', vatAmt);
+  setTxt('sum-grand', grand);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Θέτουμε το σωστό ΦΠΑ αν υπάρχει prefill
+    const vatSel = document.querySelector('select[name="vat_pct"]');
+    if(vatSel && vatSel.dataset.prefill) {
+        vatSel.value = vatSel.dataset.prefill;
+    }
+    recalcFix(); // Αρχικός υπολογισμός
+});
+</script>
+{% endblock %}

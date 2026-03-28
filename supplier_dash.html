@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h3 class="mb-3">Ανοιχτές Ζητήσεις</h3>
+<div class="card shadow-sm border-0">
+  <table class="table table-striped align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th style="width:80px">ID</th>
+        <th>Τίτλος</th>
+        <th style="width:180px">Υποβολή έως</th>
+        <th style="width:140px" class="text-end">Ενέργεια</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rfqs %}
+      <tr>
+        <td><strong>#{{ r.id }}</strong></td>
+        <td>{{ r.title }}</td>
+        <td>{{ r.submit_deadline.strftime('%d/%m/%Y') if r.submit_deadline else '-' }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-primary" href="{{ url_for('supplier_bid', req_id=r.id) }}">
+            <i class="bi bi-pencil-square"></i> Υποβολή
+          </a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-center py-4 text-muted">Δεν υπάρχουν ανοιχτές ζητήσεις για εσάς.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

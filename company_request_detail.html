@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>Ζήτηση #{{ rfq.id }} - {{ rfq.title }}</h3>
+    <div>
+        <span class="{{ phase_info(rfq).badge }} fs-6">{{ phase_info(rfq).label }}</span>
+    </div>
+</div>
+
+<p class="text-muted mb-4">
+    Δημιουργός: {{ rfq.created_by }} | {{ rfq.created_at.strftime('%d/%m/%Y %H:%M') if rfq.created_at else '' }}
+</p>
+
+<div class="row mb-4 g-3">
+    <div class="col-md-6">
+        <div class="p-3 border rounded h-100 bg-white shadow-sm">
+            <h6 class="fw-bold mb-3 border-bottom pb-2">Γενικές λεπτομέρειες</h6>
+            <p class="mb-3">{{ rfq.description or '-' }}</p>
+            
+            <ul class="list-unstyled mb-0">
+                <li class="mb-1"><strong>Τόπος παράδοσης:</strong> {{ rfq.delivery_location or '-' }}</li>
+                <li class="mb-1"><strong>Υπεύθυνος Παραλαβής:</strong> {{ rfq.receiving_manager or '-' }}</li>
+                <li class="mb-1"><strong>Τηλέφωνο Επικοινωνίας:</strong> {{ rfq.phone or '-' }}</li>
+                <li class="mb-1"><strong>Προθεσμία υποβολής:</strong> {{ rfq.submit_deadline.strftime('%d/%m/%Y') if rfq.submit_deadline else '-' }}</li>
+                <li class="mb-1"><strong>Προθεσμία παράδοσης:</strong> {{ rfq.delivery_deadline.strftime('%d/%m/%Y') if rfq.delivery_deadline else '-' }}</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="p-3 border rounded h-100 bg-white shadow-sm">
+            <h6 class="fw-bold mb-3 border-bottom pb-2">Δικαιολογητικά</h6>
+            {% if rfq.documents %}
+                <p class="mb-0 text-primary"><i class="bi bi-file-earmark-check me-2"></i>{{ rfq.documents }}</p>
+            {% else %}
+                <p class="mb-0 text-muted">Δεν έχουν οριστεί δικαιολογητικά.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<h5 class="mb-3 mt-5">Είδη προς Προμήθεια</h5>
+<div class="card shadow-sm mb-4">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Περιγραφή</th>
+                    <th>Μονάδες</th>
+                    <th>Ποσότητα</th>
+                    <th>Ανάθεση</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in rfq.items %}
+                <tr>
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td class="fw-bold">{{ item.description }}</td>
+                    <td>{{ item.unit }}</td>
+                    <td>{{ "%.2f"|format(item.quantity) }}</td>
+                    <td>
+                        {% if item.id in awards %}
+                            <span class="badge bg-success">{{ awards[item.id].supplier_name }}</span>
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center py-3">Δεν έχουν προστεθεί είδη.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mb-4">
+    {% if is_editable_by_current_user(rfq) %}
+    <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-outline-primary">Επεξεργασία</a>
+    <form method="post" action="{{ url_for('delete_request', req_id=rfq.id) }}" class="d-inline" onsubmit="return confirm('Είστε σίγουρος ότι θέλετε να διαγράψετε αυτή τη ζήτηση;');">
+        <button type="submit" class="btn btn-outline-danger">Διαγραφή</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('company_dashboard') }}" class="btn btn-link text-decoration-none">Επιστροφή</a>
+</div>
+
+{% if session.get('role') == 'chief' and rfq.status == 'pending' %}
+<hr class="my-4">
+<div class="d-flex flex-wrap gap-2 align-items-center">
+    <form method="post" action="{{ url_for('chief_approve', req_id=rfq.id) }}">
+        <button type="submit" class="btn btn-success"><i class="bi bi-check-circle me-1"></i> Έγκριση Ζήτησης</button>
+    </form>
+    
+    <form method="post" action="{{ url_for('chief_deny', req_id=rfq.id) }}" class="d-flex gap-2 ms-auto">
+        <input type="text" name="reason" class="form-control" placeholder="Αιτιολογία απόρριψης" required style="min-width: 250px;">
+        <button type="submit" class="btn btn-danger"><i class="bi bi-x-circle me-1"></i> Απόρριψη</button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}
