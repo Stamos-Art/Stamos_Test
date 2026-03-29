@@ -4,102 +4,208 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h3>Ζήτηση #{{ rfq.id }} - {{ rfq.title }}</h3>
     <div>
-        <span class="{{ phase_info(rfq).badge }} fs-6">{{ phase_info(rfq).label }}</span>
+        <span class="{{ phase_info(rfq).badge }} fs-6">
+            <i class="bi {{ phase_info(rfq).icon }} me-1"></i> {{ phase_info(rfq).label }}
+        </span>
     </div>
 </div>
 
-<p class="text-muted mb-4">
+<p class="text-muted mb-4 small">
     Δημιουργός: {{ rfq.created_by }} | {{ rfq.created_at.strftime('%d/%m/%Y %H:%M') if rfq.created_at else '' }}
 </p>
 
 <div class="row mb-4 g-3">
-    <div class="col-md-6">
-        <div class="p-3 border rounded h-100 bg-white shadow-sm">
-            <h6 class="fw-bold mb-3 border-bottom pb-2">Γενικές λεπτομέρειες</h6>
-            <p class="mb-3">{{ rfq.description or '-' }}</p>
-            
-            <ul class="list-unstyled mb-0">
-                <li class="mb-1"><strong>Τόπος παράδοσης:</strong> {{ rfq.delivery_location or '-' }}</li>
-                <li class="mb-1"><strong>Υπεύθυνος Παραλαβής:</strong> {{ rfq.receiving_manager or '-' }}</li>
-                <li class="mb-1"><strong>Τηλέφωνο Επικοινωνίας:</strong> {{ rfq.phone or '-' }}</li>
-                <li class="mb-1"><strong>Προθεσμία υποβολής:</strong> {{ rfq.submit_deadline.strftime('%d/%m/%Y') if rfq.submit_deadline else '-' }}</li>
-                <li class="mb-1"><strong>Προθεσμία παράδοσης:</strong> {{ rfq.delivery_deadline.strftime('%d/%m/%Y') if rfq.delivery_deadline else '-' }}</li>
-            </ul>
-        </div>
-    </div>
-    
-    <div class="col-md-6">
-        <div class="p-3 border rounded h-100 bg-white shadow-sm">
-            <h6 class="fw-bold mb-3 border-bottom pb-2">Δικαιολογητικά</h6>
-            {% if rfq.documents %}
-                <p class="mb-0 text-primary"><i class="bi bi-file-earmark-check me-2"></i>{{ rfq.documents }}</p>
-            {% else %}
-                <p class="mb-0 text-muted">Δεν έχουν οριστεί δικαιολογητικά.</p>
-            {% endif %}
+    <div class="col-md-12">
+        <div class="p-3 border rounded bg-white shadow-sm small">
+            <h6 class="fw-bold mb-3 border-bottom pb-2 text-uppercase">Γενικές λεπτομέρειες</h6>
+            <div class="row">
+                <div class="col-md-4">
+                    <p class="mb-2"><strong>Τόπος παράδοσης:</strong> {{ rfq.delivery_location or '-' }}</p>
+                    <p class="mb-2"><strong>Υπεύθυνος Παραλαβής:</strong> {{ rfq.receiving_manager or '-' }}</p>
+                </div>
+                <div class="col-md-4">
+                    <p class="mb-2"><strong>Τηλέφωνο:</strong> {{ rfq.phone or '-' }}</p>
+                    <p class="mb-2"><strong>Έργο/Κέντρο Κόστους:</strong> {{ rfq.cost_center.name if rfq.cost_center else '-' }}</p>
+                </div>
+                <div class="col-md-4">
+                    <p class="mb-2"><strong>Προθεσμία υποβολής:</strong> {{ rfq.submit_deadline.strftime('%d/%m/%Y') if rfq.submit_deadline else '-' }}</p>
+                    <p class="mb-0"><strong>Προθεσμία παράδοσης:</strong> {{ rfq.delivery_deadline.strftime('%d/%m/%Y') if rfq.delivery_deadline else '-' }}</p>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
-<h5 class="mb-3 mt-5">Είδη προς Προμήθεια</h5>
-<div class="card shadow-sm mb-4">
+<h5 class="mb-3 mt-4">Λίστα Ειδών για Προμήθεια</h5>
+<div class="card shadow-sm border-0 mb-4">
     <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
+        <table class="table table-hover align-middle mb-0 text-center">
             <thead class="table-light">
                 <tr>
-                    <th>#</th>
-                    <th>Περιγραφή</th>
-                    <th>Μονάδες</th>
+                    <th style="width: 50px;">#</th>
+                    <th class="text-start">Περιγραφή Είδους</th>
+                    <th>Μονάδα Μέτρησης</th>
                     <th>Ποσότητα</th>
-                    <th>Ανάθεση</th>
+                    <th>Κατάσταση Ανάθεσης</th>
                 </tr>
             </thead>
             <tbody>
-                {% for item in rfq.items %}
-                <tr>
-                    <td class="text-muted">{{ loop.index }}</td>
-                    <td class="fw-bold">{{ item.description }}</td>
-                    <td>{{ item.unit }}</td>
-                    <td>{{ "%.2f"|format(item.quantity) }}</td>
+                {% if items %}
+                    {% for item in items %}
+                    <tr>
+                        <td class="text-muted">{{ loop.index }}</td>
+                        <td class="text-start fw-bold">{{ item.description }}</td>
+                        <td>{{ item.unit or 'τμχ' }}</td>
+                        <td>{{ "%.2f"|format(item.quantity) }}</td>
+                        <td>
+                            {% if item.id in awards %}
+                                <span class="badge bg-success">Ανατέθηκε σε: {{ awards[item.id].supplier_name }}</span>
+                            {% else %}
+                                <span class="text-muted small italic">Εκκρεμεί</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="5" class="py-4 text-danger italic">Δεν βρέθηκαν είδη σε αυτή τη ζήτηση.</td>
+                    </tr>
+                {% endif %}
+                
+                <tr class="table-info">
+                    <td>-</td>
+                    <td class="text-start fw-bold"><i class="bi bi-truck me-2"></i>Μεταφορικά / Έξοδα Αποστολής</td>
+                    <td>υπηρεσία</td>
+                    <td>1.00</td>
                     <td>
-                        {% if item.id in awards %}
-                            <span class="badge bg-success">{{ awards[item.id].supplier_name }}</span>
+                        {% if shipping_award %}
+                            <span class="badge bg-success">Ανατέθηκε σε: {{ shipping_award.supplier_name }}</span>
                         {% else %}
-                            <span class="text-muted">-</span>
+                            <span class="text-muted small italic">Εκκρεμεί</span>
                         {% endif %}
                     </td>
                 </tr>
-                {% else %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if session.get('role') == 'chief' and rfq.status == 'pending' %}
+<div class="card border-warning shadow-sm my-5">
+    <div class="card-body d-flex align-items-center justify-content-between p-4">
+        <div>
+            <h5 class="fw-bold text-warning mb-1"><i class="bi bi-shield-check me-2"></i>Έγκριση Ζήτησης</h5>
+            <p class="text-muted small mb-0">Ελέγξτε τα είδη και τα στοιχεία πριν την δημοσίευση στους προμηθευτές.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <form method="post" action="{{ url_for('chief_approve', req_id=rfq.id) }}">
+                <button type="submit" class="btn btn-success px-4 shadow-sm">Έγκριση & Δημοσίευση</button>
+            </form>
+            <button class="btn btn-outline-danger px-4" data-bs-toggle="collapse" data-bs-target="#denySection">Απόρριψη</button>
+        </div>
+    </div>
+    <div class="collapse p-4 border-top bg-light" id="denySection">
+        <form method="post" action="{{ url_for('chief_deny', req_id=rfq.id) }}">
+            <div class="input-group">
+                <input type="text" name="reason" class="form-control" placeholder="Λόγος απόρριψης..." required>
+                <button type="submit" class="btn btn-danger text-white px-4">Επιβεβαίωση</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if bids %}
+<h5 class="mt-5 mb-3">Προσφορές Προμηθευτών</h5>
+<div class="card shadow-sm border-0">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 text-center">
+            <thead class="table-light">
                 <tr>
-                    <td colspan="5" class="text-center py-3">Δεν έχουν προστεθεί είδη.</td>
+                    <th class="text-start ps-3">Προμηθευτής</th>
+                    <th>Συνολική Τιμή (με ΦΠΑ)</th>
+                    <th>Ημερ. Υποβολής</th>
+                    <th class="text-end pe-3">Ενέργεια</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for bid in bids %}
+                <tr>
+                    <td class="text-start ps-3 fw-bold text-primary">{{ bid.supplier_name }}</td>
+                    <td class="fw-bold">{{ "%.2f"|format(bid.price) }} €</td>
+                    <td class="small text-muted">{{ bid.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                    <td class="text-end pe-3">
+                        <button class="btn btn-sm btn-outline-primary px-3" data-bs-toggle="collapse" data-bs-target="#bidDetails{{ bid.id }}">
+                            Ανάλυση / Ανάθεση
+                        </button>
+                    </td>
+                </tr>
+                <tr class="collapse" id="bidDetails{{ bid.id }}">
+                    <td colspan="4" class="bg-light p-4 shadow-inner">
+                        <table class="table table-sm table-bordered bg-white shadow-sm">
+                            <thead class="table-secondary text-center small fw-bold">
+                                <tr>
+                                    <th class="py-2 text-start ps-2">ΕΙΔΟΣ</th>
+                                    <th>ΠΟΣΟΤΗΤΑ</th>
+                                    <th>ΤΙΜΗ ΜΟΝ.</th>
+                                    <th>ΕΚΠΤΩΣΗ</th>
+                                    <th>ΦΠΑ %</th>
+                                    <th>ΣΥΝΟΛΟ</th>
+                                    <th>ΕΝΕΡΓΕΙΑ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for line in bid.lines %}
+                                <tr {% if line.is_combo %}class="table-info"{% endif %}>
+                                    <td class="text-start ps-2">
+                                        {% if line.is_combo %}<i class="bi bi-truck me-2"></i>{% endif %}
+                                        {{ line.description }}
+                                    </td>
+                                    <td>{{ "%.2f"|format(line.qty) }}</td>
+                                    <td>{{ "%.2f"|format(line.unit_price) }} €</td>
+                                    <td>{{ "%.2f"|format(line.discount_pct or 0) }}%</td>
+                                    <td>{{ line.vat_pct or 24 }}%</td>
+                                    <td class="fw-bold">{{ "%.2f"|format(line.line_total) }} €</td>
+                                    <td>
+                                        {% set is_awarded = false %}
+                                        {% if not line.is_combo and line.request_item_id in awards and awards[line.request_item_id].bid_id == bid.id %}
+                                            {% set is_awarded = true %}
+                                        {% elif line.is_combo and shipping_award and shipping_award.bid_id == bid.id %}
+                                            {% set is_awarded = true %}
+                                        {% endif %}
+
+                                        {% if is_awarded %}
+                                            <form method="post" action="{{ url_for('unaward_item', req_id=rfq.id) }}">
+                                                <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
+                                                <button type="submit" class="btn btn-xs btn-danger px-3 shadow-sm">Ακύρωση</button>
+                                            </form>
+                                        {% else %}
+                                            <form method="post" action="{{ url_for('award_item', req_id=rfq.id) }}">
+                                                <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
+                                                <input type="hidden" name="bid_line_id" value="{{ line.id }}">
+                                                <button type="submit" class="btn btn-xs btn-success px-3 shadow-sm" {% if rfq.status == 'closed' %}disabled{% endif %}>Ανάθεση</button>
+                                            </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-
-<div class="d-flex gap-2 mb-4">
-    {% if is_editable_by_current_user(rfq) %}
-    <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-outline-primary">Επεξεργασία</a>
-    <form method="post" action="{{ url_for('delete_request', req_id=rfq.id) }}" class="d-inline" onsubmit="return confirm('Είστε σίγουρος ότι θέλετε να διαγράψετε αυτή τη ζήτηση;');">
-        <button type="submit" class="btn btn-outline-danger">Διαγραφή</button>
-    </form>
-    {% endif %}
-    <a href="{{ url_for('company_dashboard') }}" class="btn btn-link text-decoration-none">Επιστροφή</a>
-</div>
-
-{% if session.get('role') == 'chief' and rfq.status == 'pending' %}
-<hr class="my-4">
-<div class="d-flex flex-wrap gap-2 align-items-center">
-    <form method="post" action="{{ url_for('chief_approve', req_id=rfq.id) }}">
-        <button type="submit" class="btn btn-success"><i class="bi bi-check-circle me-1"></i> Έγκριση Ζήτησης</button>
-    </form>
-    
-    <form method="post" action="{{ url_for('chief_deny', req_id=rfq.id) }}" class="d-flex gap-2 ms-auto">
-        <input type="text" name="reason" class="form-control" placeholder="Αιτιολογία απόρριψης" required style="min-width: 250px;">
-        <button type="submit" class="btn btn-danger"><i class="bi bi-x-circle me-1"></i> Απόρριψη</button>
-    </form>
-</div>
 {% endif %}
 
+<div class="d-flex gap-2 mt-5 mb-4">
+    {% if is_editable_by_current_user(rfq) or session.get('role') == 'chief' %}
+    <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-primary px-4 shadow-sm">
+        <i class="bi bi-pencil-square me-1"></i> Επεξεργασία
+    </a>
+    {% endif %}
+    <a href="{{ url_for('company_dashboard') }}" class="btn btn-outline-secondary px-4 shadow-sm">Επιστροφή</a>
+</div>
 {% endblock %}

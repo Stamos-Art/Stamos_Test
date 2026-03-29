@@ -1,15 +1,49 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h3 class="mb-3">Ανοιχτές Ζητήσεις</h3>
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card bg-primary text-white shadow-sm border-0">
+            <div class="card-body text-center">
+                <h6 class="text-uppercase small opacity-75">Εκκρεμείς Ζητήσεις</h6>
+                <h2 class="display-4 fw-bold">{{ pending_count if pending_count is defined else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-success text-white shadow-sm border-0">
+            <div class="card-body text-center">
+                <h6 class="text-uppercase small opacity-75">Συνολικές Προσφορές</h6>
+                <h2 class="display-4 fw-bold">{{ submitted_count if submitted_count is defined else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-info text-white shadow-sm border-0">
+            <div class="card-body text-center">
+                <h6 class="text-uppercase small opacity-75">Αναθέσεις</h6>
+                <h2 class="display-4 fw-bold">{{ awards_count if awards_count is defined else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Ανοιχτές Ζητήσεις</h3>
+    <a href="{{ url_for('supplier_history') }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-clock-history"></i> Ιστορικό Προσφορών
+    </a>
+</div>
+
 <div class="card shadow-sm border-0">
-  <table class="table table-striped align-middle mb-0">
+  <table class="table table-hover align-middle mb-0">
     <thead class="table-light">
       <tr>
         <th style="width:80px">ID</th>
         <th>Τίτλος</th>
-        <th style="width:180px">Υποβολή έως</th>
-        <th style="width:140px" class="text-end">Ενέργεια</th>
+        <th>Κατάσταση Προσφοράς</th>
+        <th>Υποβολή έως</th>
+        <th class="text-end">Ενέργεια</th>
       </tr>
     </thead>
     <tbody>
@@ -17,15 +51,32 @@
       <tr>
         <td><strong>#{{ r.id }}</strong></td>
         <td>{{ r.title }}</td>
-        <td>{{ r.submit_deadline.strftime('%d/%m/%Y') if r.submit_deadline else '-' }}</td>
+        <td>
+            {% if bids_map and r.id in bids_map %}
+                {% if bids_map[r.id].status == 'submitted' %}
+                    <span class="badge rounded-pill bg-success-subtle text-success border border-success">Απεστάλη</span>
+                {% else %}
+                    <span class="badge rounded-pill bg-warning-subtle text-warning border border-warning">Πρόχειρο</span>
+                {% endif %}
+            {% else %}
+                <span class="text-muted small italic">Δεν ξεκίνησε</span>
+            {% endif %}
+        </td>
+        <td>
+            <span class="badge {% if r.submit_deadline and r.submit_deadline < now %}bg-danger{% else %}bg-light text-dark{% endif %}">
+                <i class="bi bi-calendar-event me-1"></i>
+                {{ r.submit_deadline.strftime('%d/%m/%Y') if r.submit_deadline else '-' }}
+            </span>
+        </td>
         <td class="text-end">
-          <a class="btn btn-sm btn-primary" href="{{ url_for('supplier_bid', req_id=r.id) }}">
-            <i class="bi bi-pencil-square"></i> Υποβολή
+          <a class="btn btn-sm btn-primary px-3" href="{{ url_for('supplier_bid', req_id=r.id) }}">
+            <i class="bi bi-pencil-square me-1"></i> 
+            {% if bids_map and r.id in bids_map %}Επεξεργασία{% else %}Υποβολή{% endif %}
           </a>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="text-center py-4 text-muted">Δεν υπάρχουν ανοιχτές ζητήσεις για εσάς.</td></tr>
+      <tr><td colspan="5" class="text-center py-5 text-muted">Δεν υπάρχουν ανοιχτές ζητήσεις για εσάς.</td></tr>
       {% endfor %}
     </tbody>
   </table>
