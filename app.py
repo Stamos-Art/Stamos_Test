@@ -133,25 +133,16 @@ def new_request():
     if request.method == "POST":
         title = (request.form.get("title") or "").strip()
         location = (request.form.get("delivery_location") or "").strip()
-        r_manager = (request.form.get("receiving_manager") or "").strip() # <--- ΝΕΟ
-        phone = (request.form.get("phone") or "").strip()                 # <--- ΝΕΟ
+        r_manager = (request.form.get("receiving_manager") or "").strip()
+        phone = (request.form.get("phone") or "").strip()
         details = (request.form.get("details") or "").strip()
-        cc_id = request.form.get("cost_center")
+        cc_id = request.form.get("cost_center") 
         
         try:
             s_deadline = datetime.strptime(request.form.get("submit_deadline"), "%Y-%m-%d")
             d_deadline = datetime.strptime(request.form.get("delivery_deadline"), "%Y-%m-%d")
         except (ValueError, TypeError):
             flash("Μη έγκυρη ημερομηνία.", "danger")
-            return redirect(url_for("new_request"))
-
-        if d_deadline < s_deadline:
-            flash("Η ημερομηνία παράδοσης δεν μπορεί να είναι νωρίτερα από την ημερομηνία υποβολής.", "danger")
-            return redirect(url_for("new_request"))
-
-        selected_suppliers = request.form.getlist("suppliers[]")
-        if not selected_suppliers:
-            flash("Επίλεξε τουλάχιστον έναν προμηθευτή.", "danger")
             return redirect(url_for("new_request"))
 
         if not cc_id:
@@ -173,29 +164,6 @@ def new_request():
         db.session.add(rfq)
         db.session.flush()
 
-        desc_list = request.form.getlist("item_desc[]")
-        unit_list = request.form.getlist("item_unit[]")
-        qty_list = request.form.getlist("item_qty[]")
-
-        has_items = False
-        for d, u, q in zip(desc_list, unit_list, qty_list):
-            if d.strip() and float(q or 0) > 0:
-                db.session.add(RequestItem(request_id=rfq.id, description=d, unit=u, quantity=float(q)))
-                has_items = True
-        
-        if not has_items:
-            db.session.rollback()
-            flash("Πρέπει να προσθέσεις τουλάχιστον ένα είδος.", "danger")
-            return redirect(url_for("new_request"))
-
-        for uname in selected_suppliers:
-            db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
-
-        docs = request.form.getlist("docs[]")
-        if docs:
-            labels = {"tech_specs":"Τεχνικές προδιαγραφές","iso":"Πιστοποιήσεις ISO","warranty":"Εγγύηση"}
-            rfq.documents = ", ".join(labels.get(d, d) for d in docs)
-
         db.session.commit()
         flash("Η ζήτηση δημιουργήθηκε επιτυχώς.", "success")
         return redirect(url_for("company_dashboard"))
@@ -207,113 +175,65 @@ def new_request():
 @require_roles("company", "chief")
 def company_request_detail(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    bids = Bid.query.filter_by(request_id=req_id).order_by(Bid.price.asc()).all()
+    bids = Bid.query.filter_by(request_id=req_id).all()
     
-    awards = {aw.request_item_id: aw for aw in ItemAward.query.filter_by(request_id=rfq.id).all()}
-    receipts = {r.request_item_id: r for r in ItemReceipt.query.filter_by(request_id=rfq.id).all()}
-    
-    items_count = len(rfq.items)
-    awarded_count = len(awards)
-    received_count = len(receipts)
-    
-    is_fully_awarded = (items_count > 0 and awarded_count == items_count) or rfq.winning_bid_id is not None
-    is_fully_received = (items_count > 0 and received_count == items_count)
-    current_award_total = sum(aw.line_total or 0 for aw in awards.values())
+    awards_list = ItemAward.query.filter_by(request_id=req_id).all()
+    # Λεξικό για τα κανονικά υλικά (item_id != None)
+    awards = {aw.request_item_id: aw for aw in awards_list if aw.request_item_id is not None}
+    # Μεταβλητή για την ανάθεση των μεταφορικών (όπου item_id == None)
+    shipping_award = next((aw for aw in awards_list if aw.request_item_id is None), None)
 
-    invited_usernames = [a.supplier_username for a in rfq.allowed_suppliers]
-    invited_suppliers = User.query.filter(User.username.in_(invited_usernames)).all()
+    return render_template("company_request_detail.html", 
+                           rfq=rfq, bids=bids, awards=awards, 
+                           shipping_award=shipping_award)
 
-    financial_summary = []
-    grand_total_final = Decimal(0)
-    involved_bids = {} 
-    
-    for aw in awards.values():
-        if aw.bid_id not in involved_bids:
-            involved_bids[aw.bid_id] = {'bid': aw.bid, 'item_total': Decimal(0)}
-        involved_bids[aw.bid_id]['item_total'] += (aw.line_total or Decimal(0))
-
-    for bid_id, data in involved_bids.items():
-        bid = data['bid']
-        item_total = data['item_total']
-        
-        shipping = bid.shipping_cost or Decimal(0)
-        vat_pct = bid.vat_pct or Decimal(0)
-        
-        taxable = item_total + shipping
-        vat_amount = taxable * (vat_pct / 100)
-        
-        total_supplier = taxable + vat_amount
-        
-        financial_summary.append({
-            'supplier': bid.supplier_name,
-            'items_cost': item_total,
-            'shipping': shipping,
-            'vat': vat_amount,
-            'total': total_supplier
-        })
-        grand_total_final += total_supplier
-
-    summary_data = []
-    for item in rfq.items:
-        if item.id in awards:
-            aw = awards[item.id]
-            summary_data.append({
-                'item_desc': item.description,
-                'qty': aw.qty,
-                'supplier': aw.supplier_name,
-                'unit_price': aw.unit_price,
-                'total': aw.line_total
-            })
-
-    return render_template(
-        "company_request_detail.html",
-        rfq=rfq, bids=bids, awards=awards, receipts=receipts,
-        is_fully_awarded=is_fully_awarded, is_fully_received=is_fully_received,
-        current_award_total=current_award_total, invited_suppliers=invited_suppliers,
-        summary_data=summary_data, financial_summary=financial_summary, grand_total_final=grand_total_final
-    )
 
 @app.route("/company/requests/<int:req_id>/award_item", methods=["POST"])
 @require_roles("company", "chief")
 def award_item(req_id):
-    rfq = RequestRFQ.query.get_or_404(req_id)
-    item_id = request.form.get("request_item_id")
+    item_id_raw = request.form.get("request_item_id") # Μπορεί να είναι 'shipping' ή ID
     bid_line_id = request.form.get("bid_line_id")
-    
-    if not item_id or not bid_line_id:
-        flash("Λείπουν στοιχεία για την ανάθεση.", "danger")
-        return redirect(url_for('company_request_detail', req_id=req_id))
-        
     bid_line = BidLine.query.get(bid_line_id)
-    bid = bid_line.bid
-    
-    award = ItemAward.query.filter_by(request_item_id=item_id).first()
-    if not award:
-        award = ItemAward(request_id=rfq.id, request_item_id=item_id)
-        db.session.add(award)
-        
-    award.bid_id = bid.id
+
+    if item_id_raw == 'shipping':
+        # Ψάχνουμε ανάθεση για μεταφορικά (request_item_id is None)
+        award = ItemAward.query.filter(ItemAward.request_id == req_id, ItemAward.request_item_id == None).first()
+        if not award:
+            award = ItemAward(request_id=req_id, request_item_id=None)
+            db.session.add(award)
+    else:
+        item_id = int(item_id_raw)
+        award = ItemAward.query.filter_by(request_id=req_id, request_item_id=item_id).first()
+        if not award:
+            award = ItemAward(request_id=req_id, request_item_id=item_id)
+            db.session.add(award)
+
+    award.bid_id = bid_line.bid_id
     award.bid_line_id = bid_line.id
-    award.supplier_name = bid.supplier_name
+    award.supplier_name = bid_line.bid.supplier_name
+    award.line_total = bid_line.line_total
     award.qty = bid_line.qty
     award.unit_price = bid_line.unit_price
-    award.line_total = bid_line.line_total
     
     db.session.commit()
-    flash(f"Το είδος ανατέθηκε στον {bid.supplier_name}.", "success")
+    flash(f"Η ανάθεση για '{bid_line.description}' ενημερώθηκε.", "success")
     return redirect(url_for('company_request_detail', req_id=req_id))
 
 @app.route("/company/requests/<int:req_id>/unaward_item", methods=["POST"])
 @require_roles("company", "chief")
 def unaward_item(req_id):
-    rfq = RequestRFQ.query.get_or_404(req_id)
-    item_id = request.form.get("request_item_id")
-    award = ItemAward.query.filter_by(request_item_id=item_id, request_id=rfq.id).first()
+    item_id_raw = request.form.get("request_item_id")
+    if item_id_raw == 'shipping':
+        award = ItemAward.query.filter(ItemAward.request_id == req_id, ItemAward.request_item_id == None).first()
+    else:
+        award = ItemAward.query.filter_by(request_id=req_id, request_item_id=int(item_id_raw)).first()
+    
     if award:
         db.session.delete(award)
         db.session.commit()
-        flash("Η επιλογή αφαιρέθηκε.", "info")
+        flash("Η ανάθεση ακυρώθηκε.", "info")
     return redirect(url_for('company_request_detail', req_id=req_id))
+
 
 @app.route("/company/requests/<int:req_id>/finalize_award", methods=["POST"])
 @require_roles("company", "chief")
@@ -548,73 +468,142 @@ def edit_cost_center(cc_id):
     flash(f"Το έργο {cc.code} ενημερώθηκε επιτυχώς.", "success")
     return redirect(url_for('manage_cost_centers'))
 
+
 @app.route("/supplier")
 @require_role("supplier")
 def supplier_dashboard():
     username = session.get("username")
-    rfqs = RequestRFQ.query.filter_by(status="open").join(AllowedSupplier).filter(AllowedSupplier.supplier_username == username).order_by(RequestRFQ.id.desc()).all()
-    return render_template("supplier_dash.html", rfqs=rfqs)
+    supplier_name = session.get("name")
+    
+    rfqs = RequestRFQ.query.filter_by(status="open").join(AllowedSupplier).filter(AllowedSupplier.supplier_username == username).all()
+    
+    # Χάρτης προσφορών για το UI
+    bids = Bid.query.filter_by(supplier_name=supplier_name).all()
+    bids_map = {b.request_id: b for b in bids}
+    
+    # Στατιστικά για τις κάρτες
+    submitted_count = Bid.query.filter_by(supplier_name=supplier_name, status='submitted').count()
+    awards_count = ItemAward.query.filter_by(supplier_name=supplier_name).count()
+    pending_count = len(rfqs) - submitted_count
+
+    return render_template("supplier_dash.html", 
+                           rfqs=rfqs, 
+                           bids_map=bids_map,
+                           pending_count=max(0, pending_count),
+                           submitted_count=submitted_count,
+                           awards_count=awards_count)
+
+@app.route("/supplier/history")
+@require_role("supplier")
+def supplier_history():
+    supplier_name = session.get("name")
+    my_bids = Bid.query.filter_by(supplier_name=supplier_name).order_by(Bid.created_at.desc()).all()
+    return render_template("supplier_history.html", bids=my_bids)
 
 @app.route("/supplier/requests/<int:req_id>/bid", methods=["GET", "POST"])
 @require_role("supplier")
 def supplier_bid(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
     supplier_name = session.get("name")
-    
     existing_bid = Bid.query.filter_by(request_id=req_id, supplier_name=supplier_name).first()
-    is_locked = False
-    if existing_bid:
-        if ItemAward.query.filter_by(bid_id=existing_bid.id).first():
-            is_locked = True
     
+    is_locked = False
+    if existing_bid and ItemAward.query.filter_by(bid_id=existing_bid.id).first():
+        is_locked = True
+
     if request.method == "POST":
         if is_locked:
-            flash("Η προσφορά έχει κλειδωθεί λόγω ανάθεσης.", "warning")
-            return redirect(request.url)
+            flash("Η προσφορά είναι κλειδωμένη λόγω ανάθεσης.", "danger")
+            return redirect(url_for('supplier_dashboard'))
 
+        action = request.form.get("action")
         if not existing_bid:
             existing_bid = Bid(request_id=rfq.id, supplier_name=supplier_name, price=0)
             db.session.add(existing_bid)
             db.session.flush()
         
+        # Καθαρισμός παλιών γραμμών
         BidLine.query.filter_by(bid_id=existing_bid.id).delete()
         
         subtotal = Decimal(0)
-        
-        for item in rfq.items:
-            price_str = request.form.get(f"price_{item.id}")
-            if price_str and float(price_str) > 0:
-                u_price = Decimal(price_str)
-                line_tot = u_price * item.quantity
-                
-                bl = BidLine(
-                    bid_id=existing_bid.id,
-                    request_item_id=item.id,
-                    description=item.description,
-                    unit=item.unit,
-                    qty=item.quantity,
-                    unit_price=u_price,
-                    line_total=line_tot
-                )
-                db.session.add(bl)
-                subtotal += line_tot
+        total_vat = Decimal(0)
 
-        existing_bid.subtotal = subtotal
-        shipping = Decimal(request.form.get("shipping", 0))
-        vat_pct = Decimal(request.form.get("vat_pct", 24))
+        # 1. Αποθήκευση Υλικών
+        for item in rfq.items:
+            price = Decimal(request.form.get(f"item_price_{item.id}") or 0)
+            disc_val = Decimal(request.form.get(f"item_discount_{item.id}") or 0)
+            disc_type = request.form.get(f"item_discount_type_{item.id}") or 'pct'
+            vat_p = Decimal(request.form.get(f"item_vat_{item.id}") or 24)
+            
+            line_gross = price * Decimal(item.quantity)
+            line_net = line_gross * (1 - disc_val/100) if disc_type == 'pct' else max(0, line_gross - disc_val)
+            
+            bl = BidLine(
+                bid_id=existing_bid.id, request_item_id=item.id,
+                description=item.description, unit=item.unit, qty=item.quantity,
+                unit_price=price, discount_pct=disc_val if disc_type == 'pct' else 0,
+                discount_amount=disc_val if disc_type == 'amt' else 0,
+                discount_type=disc_type, vat_pct=vat_p, line_total=line_net, is_combo=False
+            )
+            db.session.add(bl)
+            subtotal += line_net
+            total_vat += (line_net * vat_p / 100)
+
+        # 2. Αποθήκευση Μεταφορικών ως BidLine (is_combo=True)
+        ship_price = Decimal(request.form.get("shipping_cost") or 0)
+        if ship_price > 0:
+            ship_line = BidLine(
+                bid_id=existing_bid.id, description="Μεταφορικά / Έξοδα Αποστολής",
+                qty=1, unit="υπηρεσία", unit_price=ship_price, line_total=ship_price,
+                vat_pct=24, is_combo=True 
+            )
+            db.session.add(ship_line)
+            subtotal += ship_price
+            total_vat += (ship_price * Decimal(0.24))
+
+        # Συνολικοί υπολογισμοί
+        ov_disc = Decimal(request.form.get("overall_discount_val") or 0)
+        ov_type = request.form.get("overall_discount_type") or 'pct'
+        final_disc = (subtotal * ov_disc / 100) if ov_type == 'pct' else ov_disc
         
-        vat_amt = (subtotal + shipping) * (vat_pct / 100)
-        existing_bid.shipping_cost = shipping
-        existing_bid.vat_pct = vat_pct
-        existing_bid.vat_amount = vat_amt
-        existing_bid.price = subtotal + shipping + vat_amt
-        existing_bid.notes = request.form.get("notes")
+        existing_bid.subtotal = subtotal
+        existing_bid.discount_total = final_disc
+        existing_bid.overall_discount_type = ov_type
+        existing_bid.vat_amount = total_vat
+        existing_bid.price = subtotal - final_disc + total_vat
+        existing_bid.status = 'submitted' if action == 'submit' else 'draft'
+        
+        # Ημερομηνία Παράδοσης
+        prop_date = request.form.get("proposed_delivery_date")
+        if prop_date:
+            try:
+                existing_bid.proposed_delivery_date = datetime.strptime(prop_date, "%Y-%m-%d")
+            except ValueError:
+                pass
 
         db.session.commit()
-        flash("Η προσφορά αποθηκεύτηκε.", "success")
+        flash("Επιτυχής αποθήκευση προσφοράς.", "success")
         return redirect(url_for('supplier_dashboard'))
+    
 
-    return render_template("supplier_bid.html", rfq=rfq, bid=existing_bid, locked=is_locked)
+    # Logic για το GET (Προετοιμασία Prefill)
+    item_prefill = {}
+    if existing_bid:
+        for bl in existing_bid.lines:
+            if not bl.is_combo:
+                item_prefill[bl.request_item_id] = {
+                    'price': bl.unit_price, 
+                    'disc': bl.discount_pct if bl.discount_type == 'pct' else bl.discount_amount,
+                    'disc_type': bl.discount_type,
+                    'vat': bl.vat_pct
+                }
+
+    return render_template("supplier_bid.html", 
+                           rfq=rfq, bid=existing_bid, readonly=is_locked,
+                           item_prefill=item_prefill,
+                           overall_prefill=existing_bid.overall_discount_pct if existing_bid and existing_bid.overall_discount_type == 'pct' else (existing_bid.discount_total if existing_bid else 0),
+                           discount_type=existing_bid.overall_discount_type if existing_bid else 'pct',
+                           shipping_prefill=existing_bid.shipping_cost if existing_bid else 0)
 
 
 def _has_column(table: str, column: str) -> bool:
@@ -628,6 +617,34 @@ def migrate_db():
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN first_name TEXT")
         if not _has_column("users", "last_name"):
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN last_name TEXT")
+            
+        # Προσθήκη πεδίων στο Bid
+        if not _has_column("bids", "status"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN status VARCHAR(20) DEFAULT 'draft'")
+        if not _has_column("bids", "overall_discount_type"):
+             conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN overall_discount_type VARCHAR(10) DEFAULT 'pct'")
+        if not _has_column("bids", "proposed_delivery_date"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN proposed_delivery_date DATETIME")
+        if not _has_column("bids", "subtotal"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN subtotal NUMERIC")
+        if not _has_column("bids", "discount_total"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN discount_total NUMERIC")
+        if not _has_column("bids", "overall_discount_pct"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN overall_discount_pct NUMERIC")
+        if not _has_column("bids", "shipping_cost"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN shipping_cost NUMERIC")
+        if not _has_column("bids", "vat_amount"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN vat_amount NUMERIC")
+
+        # Προσθήκη πεδίων στο BidLine
+        if not _has_column("bid_lines", "discount_type"):
+            conn.exec_driver_sql("ALTER TABLE bid_lines ADD COLUMN discount_type VARCHAR(10) DEFAULT 'pct'")
+        if not _has_column("bid_lines", "vat_pct"):
+            conn.exec_driver_sql("ALTER TABLE bid_lines ADD COLUMN vat_pct NUMERIC(5, 2) DEFAULT 24")
+        if not _has_column("bid_lines", "is_combo"):
+            conn.exec_driver_sql("ALTER TABLE bid_lines ADD COLUMN is_combo BOOLEAN DEFAULT 0")
+
+        # Πεδία Requests
         if not _has_column("requests", "approved_by"):
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN approved_by VARCHAR(100)")
         if not _has_column("requests", "approved_at"):
@@ -641,21 +658,14 @@ def migrate_db():
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN delivery_location VARCHAR(255)")
         if not _has_column("requests", "documents"):
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN documents VARCHAR(255)")
-        if not _has_column("bids", "subtotal"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN subtotal NUMERIC")
-        if not _has_column("bids", "discount_total"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN discount_total NUMERIC")
-        if not _has_column("bids", "overall_discount_pct"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN overall_discount_pct NUMERIC")
-        if not _has_column("bids", "shipping_cost"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN shipping_cost NUMERIC")
-        if not _has_column("bids", "vat_pct"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN vat_pct NUMERIC")
-        if not _has_column("bids", "vat_amount"):
-            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN vat_amount NUMERIC")
-            
         if not _has_column("requests", "cost_center_id"):
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN cost_center_id INTEGER REFERENCES cost_centers(id)")
+        if not _has_column("requests", "receiving_manager"):
+            conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN receiving_manager VARCHAR(120)")
+        if not _has_column("requests", "phone"):
+            conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN phone VARCHAR(50)")
+
+        # Πεδία Cost Centers
         if not _has_column("cost_centers", "address"):
             conn.exec_driver_sql("ALTER TABLE cost_centers ADD COLUMN address VARCHAR(250)")
         if not _has_column("cost_centers", "project_manager"):
@@ -664,10 +674,6 @@ def migrate_db():
             conn.exec_driver_sql("ALTER TABLE cost_centers ADD COLUMN receiving_manager VARCHAR(120)")
         if not _has_column("cost_centers", "phone"):
             conn.exec_driver_sql("ALTER TABLE cost_centers ADD COLUMN phone VARCHAR(50)")
-        if not _has_column("requests", "receiving_manager"):
-            conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN receiving_manager VARCHAR(120)")
-        if not _has_column("requests", "phone"):
-            conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN phone VARCHAR(50)")
 
 def init_db():
     with app.app_context():
