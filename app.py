@@ -164,6 +164,26 @@ def new_request():
         db.session.add(rfq)
         db.session.flush()
 
+        # ΔΙΟΡΘΩΣΗ: Αποθήκευση των Ειδών
+        item_descs = request.form.getlist("item_desc[]")
+        item_units = request.form.getlist("item_unit[]")
+        item_qtys = request.form.getlist("item_qty[]")
+        for i in range(len(item_descs)):
+            desc = item_descs[i].strip()
+            if not desc:
+                continue
+            unit = item_units[i] if i < len(item_units) else "τμχ"
+            try:
+                qty = float(item_qtys[i])
+            except ValueError:
+                qty = 1.0
+            db.session.add(RequestItem(request_id=rfq.id, description=desc, unit=unit, quantity=qty))
+
+        # ΔΙΟΡΘΩΣΗ: Αποθήκευση των Επιλεγμένων Προμηθευτών
+        selected_suppliers = request.form.getlist("suppliers[]")
+        for uname in selected_suppliers:
+            db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
+
         db.session.commit()
         flash("Η ζήτηση δημιουργήθηκε επιτυχώς.", "success")
         return redirect(url_for("company_dashboard"))
@@ -183,20 +203,21 @@ def company_request_detail(req_id):
     # Μεταβλητή για την ανάθεση των μεταφορικών (όπου item_id == None)
     shipping_award = next((aw for aw in awards_list if aw.request_item_id is None), None)
 
+    # ΔΙΟΡΘΩΣΗ: Προστέθηκε το items=rfq.items
     return render_template("company_request_detail.html", 
-                           rfq=rfq, bids=bids, awards=awards, 
+                           rfq=rfq, items=rfq.items, bids=bids, awards=awards, 
                            shipping_award=shipping_award)
 
 
 @app.route("/company/requests/<int:req_id>/award_item", methods=["POST"])
 @require_roles("company", "chief")
 def award_item(req_id):
-    item_id_raw = request.form.get("request_item_id") # Μπορεί να είναι 'shipping' ή ID
+    item_id_raw = request.form.get("request_item_id")
     bid_line_id = request.form.get("bid_line_id")
     bid_line = BidLine.query.get(bid_line_id)
 
     if item_id_raw == 'shipping':
-        # Ψάχνουμε ανάθεση για μεταφορικά (request_item_id is None)
+        # Ψάχνουμε ανάθεση για μεταφορικά
         award = ItemAward.query.filter(ItemAward.request_id == req_id, ItemAward.request_item_id == None).first()
         if not award:
             award = ItemAward(request_id=req_id, request_item_id=None)
@@ -295,6 +316,22 @@ def edit_request(req_id):
             AllowedSupplier.query.filter_by(request_id=rfq.id).delete()
             for uname in selected_suppliers:
                 db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
+
+        # ΔΙΟΡΘΩΣΗ: Ενημέρωση των Ειδών (Αντικατάσταση παλιών με τα νέα που συμπληρώθηκαν)
+        RequestItem.query.filter_by(request_id=rfq.id).delete()
+        item_descs = request.form.getlist("item_desc[]")
+        item_units = request.form.getlist("item_unit[]")
+        item_qtys = request.form.getlist("item_qty[]")
+        for i in range(len(item_descs)):
+            desc = item_descs[i].strip()
+            if not desc:
+                continue
+            unit = item_units[i] if i < len(item_units) else "τμχ"
+            try:
+                qty = float(item_qtys[i])
+            except ValueError:
+                qty = 1.0
+            db.session.add(RequestItem(request_id=rfq.id, description=desc, unit=unit, quantity=qty))
 
         if rfq.status == 'denied':
             rfq.status = 'pending'
@@ -401,7 +438,6 @@ def manage_cost_centers():
         code = request.form.get("code").strip()
         name = request.form.get("name").strip()
         
-        # Λήψη των νέων πεδίων
         address = (request.form.get("address") or "").strip()
         project_manager = (request.form.get("project_manager") or "").strip()
         receiving_manager = (request.form.get("receiving_manager") or "").strip()
@@ -442,7 +478,6 @@ def toggle_cost_center(cc_id):
 def edit_cost_center(cc_id):
     cc = CostCenter.query.get_or_404(cc_id)
     
-    # Διαβάζουμε τα νέα δεδομένα από τη φόρμα
     new_code = request.form.get("code").strip()
     new_name = request.form.get("name").strip()
     
@@ -450,13 +485,11 @@ def edit_cost_center(cc_id):
         flash("Ο κωδικός και η περιγραφή είναι υποχρεωτικά.", "danger")
         return redirect(url_for('manage_cost_centers'))
         
-    # Ελέγχουμε μήπως ο νέος κωδικός ανήκει ήδη σε ΑΛΛΟ έργο
     existing = CostCenter.query.filter_by(code=new_code).first()
     if existing and existing.id != cc.id:
         flash("Ο κωδικός έργου χρησιμοποιείται ήδη σε άλλο έργο.", "danger")
         return redirect(url_for('manage_cost_centers'))
         
-    # Αποθηκεύουμε τις αλλαγές
     cc.code = new_code
     cc.name = new_name
     cc.address = (request.form.get("address") or "").strip()
@@ -477,11 +510,9 @@ def supplier_dashboard():
     
     rfqs = RequestRFQ.query.filter_by(status="open").join(AllowedSupplier).filter(AllowedSupplier.supplier_username == username).all()
     
-    # Χάρτης προσφορών για το UI
     bids = Bid.query.filter_by(supplier_name=supplier_name).all()
     bids_map = {b.request_id: b for b in bids}
     
-    # Στατιστικά για τις κάρτες
     submitted_count = Bid.query.filter_by(supplier_name=supplier_name, status='submitted').count()
     awards_count = ItemAward.query.filter_by(supplier_name=supplier_name).count()
     pending_count = len(rfqs) - submitted_count
@@ -522,13 +553,11 @@ def supplier_bid(req_id):
             db.session.add(existing_bid)
             db.session.flush()
         
-        # Καθαρισμός παλιών γραμμών
         BidLine.query.filter_by(bid_id=existing_bid.id).delete()
         
         subtotal = Decimal(0)
         total_vat = Decimal(0)
 
-        # 1. Αποθήκευση Υλικών
         for item in rfq.items:
             price = Decimal(request.form.get(f"item_price_{item.id}") or 0)
             disc_val = Decimal(request.form.get(f"item_discount_{item.id}") or 0)
@@ -549,7 +578,6 @@ def supplier_bid(req_id):
             subtotal += line_net
             total_vat += (line_net * vat_p / 100)
 
-        # 2. Αποθήκευση Μεταφορικών ως BidLine (is_combo=True)
         ship_price = Decimal(request.form.get("shipping_cost") or 0)
         if ship_price > 0:
             ship_line = BidLine(
@@ -561,7 +589,6 @@ def supplier_bid(req_id):
             subtotal += ship_price
             total_vat += (ship_price * Decimal(0.24))
 
-        # Συνολικοί υπολογισμοί
         ov_disc = Decimal(request.form.get("overall_discount_val") or 0)
         ov_type = request.form.get("overall_discount_type") or 'pct'
         final_disc = (subtotal * ov_disc / 100) if ov_type == 'pct' else ov_disc
@@ -573,7 +600,6 @@ def supplier_bid(req_id):
         existing_bid.price = subtotal - final_disc + total_vat
         existing_bid.status = 'submitted' if action == 'submit' else 'draft'
         
-        # Ημερομηνία Παράδοσης
         prop_date = request.form.get("proposed_delivery_date")
         if prop_date:
             try:
@@ -585,8 +611,6 @@ def supplier_bid(req_id):
         flash("Επιτυχής αποθήκευση προσφοράς.", "success")
         return redirect(url_for('supplier_dashboard'))
     
-
-    # Logic για το GET (Προετοιμασία Prefill)
     item_prefill = {}
     if existing_bid:
         for bl in existing_bid.lines:
@@ -618,7 +642,6 @@ def migrate_db():
         if not _has_column("users", "last_name"):
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN last_name TEXT")
             
-        # Προσθήκη πεδίων στο Bid
         if not _has_column("bids", "status"):
             conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN status VARCHAR(20) DEFAULT 'draft'")
         if not _has_column("bids", "overall_discount_type"):
@@ -636,7 +659,6 @@ def migrate_db():
         if not _has_column("bids", "vat_amount"):
             conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN vat_amount NUMERIC")
 
-        # Προσθήκη πεδίων στο BidLine
         if not _has_column("bid_lines", "discount_type"):
             conn.exec_driver_sql("ALTER TABLE bid_lines ADD COLUMN discount_type VARCHAR(10) DEFAULT 'pct'")
         if not _has_column("bid_lines", "vat_pct"):
@@ -644,7 +666,6 @@ def migrate_db():
         if not _has_column("bid_lines", "is_combo"):
             conn.exec_driver_sql("ALTER TABLE bid_lines ADD COLUMN is_combo BOOLEAN DEFAULT 0")
 
-        # Πεδία Requests
         if not _has_column("requests", "approved_by"):
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN approved_by VARCHAR(100)")
         if not _has_column("requests", "approved_at"):
@@ -665,7 +686,6 @@ def migrate_db():
         if not _has_column("requests", "phone"):
             conn.exec_driver_sql("ALTER TABLE requests ADD COLUMN phone VARCHAR(50)")
 
-        # Πεδία Cost Centers
         if not _has_column("cost_centers", "address"):
             conn.exec_driver_sql("ALTER TABLE cost_centers ADD COLUMN address VARCHAR(250)")
         if not _has_column("cost_centers", "project_manager"):
