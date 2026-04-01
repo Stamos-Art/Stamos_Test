@@ -47,7 +47,6 @@
                     {% endif %}
                 </div>
             </div>
-
         </div>
     </div>
 </div>
@@ -94,8 +93,10 @@
                     <td>υπηρεσία</td>
                     <td>1.00</td>
                     <td>
-                        {% if shipping_award %}
-                            <span class="badge bg-success">Ανατέθηκε σε: {{ shipping_award.supplier_name }}</span>
+                        {% if shipping_awards %}
+                            {% for sa in shipping_awards %}
+                                <div class="badge bg-success mb-1">Ανατέθηκε σε: {{ sa.supplier_name }}</div>
+                            {% endfor %}
                         {% else %}
                             <span class="text-muted small italic">Εκκρεμεί</span>
                         {% endif %}
@@ -105,6 +106,40 @@
         </table>
     </div>
 </div>
+
+{% if awarded_summary %}
+<div class="card border-success shadow-sm mb-5">
+    <div class="card-body">
+        <h6 class="fw-bold text-success mb-3 border-bottom pb-2"><i class="bi bi-calculator me-2"></i>Σύνοψη Κόστους Αναθέσεων</h6>
+        <div class="row align-items-center">
+            <div class="col-md-7">
+                <p class="text-muted small mb-2 text-uppercase fw-bold">Κόστος ανά Προμηθευτή (Καθαρή Αξία)</p>
+                <ul class="list-group list-group-flush">
+                    {% for sup, data in awarded_summary.items() %}
+                    <li class="list-group-item px-0 py-2 border-0">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-person-check text-success me-2"></i><strong>{{ sup }}</strong></span>
+                            <span class="fw-bold fs-6">{{ "%.2f"|format(data.final_total) }} €</span>
+                        </div>
+                        {% if data.overall_discount > 0 %}
+                        <div class="d-flex justify-content-between align-items-center small text-muted mt-1">
+                            <span class="ps-4">Αρχικό Υποσύνολο: {{ "%.2f"|format(data.subtotal) }} €</span>
+                            <span class="text-danger"><i class="bi bi-arrow-down-right"></i> Συν. Έκπτωση: -{{ "%.2f"|format(data.overall_discount) }} €</span>
+                        </div>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="col-md-5 text-end border-start">
+                <div class="text-muted small fw-bold text-uppercase mb-1">Τελικο Συνολο Αναθεσεων</div>
+                <div class="display-6 text-success fw-bold">{{ "%.2f"|format(grand_total_awarded) }} €</div>
+                <div class="small text-muted mt-1">* Έχουν αφαιρεθεί όλες οι εκπτώσεις. Δεν περιλαμβάνει ΦΠΑ.</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 {% if session.get('role') == 'chief' and rfq.status == 'pending' %}
 <div class="card border-warning shadow-sm my-5">
@@ -156,8 +191,45 @@
                         </button>
                     </td>
                 </tr>
-                <tr class="collapse" id="bidDetails{{ bid.id }}">
+                
+                <tr class="collapse {% if request.args.get('open_bid')|string == bid.id|string %}show{% endif %}" id="bidDetails{{ bid.id }}">
                     <td colspan="4" class="bg-light p-4 shadow-inner">
+                        
+                        <div class="d-flex flex-wrap gap-4 mb-3 p-3 bg-white border rounded shadow-sm text-start">
+                            <div>
+                                <div class="text-muted small fw-bold text-uppercase mb-1"><i class="bi bi-calendar-check text-primary me-1"></i>Προτεινόμενη Παράδοση</div>
+                                <div class="fs-6 fw-bold">
+                                    {% if bid.proposed_delivery_date %}
+                                        {{ bid.proposed_delivery_date.strftime('%d/%m/%Y') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div class="border-start ps-4">
+                                <div class="text-muted small fw-bold text-uppercase mb-1"><i class="bi bi-tags text-danger me-1"></i>Συνολική Έκπτωση</div>
+                                <div class="fs-6 fw-bold text-danger">
+                                    {% if bid.discount_total and bid.discount_total > 0 %}
+                                        -{{ "%.2f"|format(bid.discount_total) }} €
+                                    {% else %}
+                                        <span class="text-dark">-</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="flex-grow-1 border-start ps-4">
+                                <div class="text-muted small fw-bold text-uppercase mb-1"><i class="bi bi-chat-text text-primary me-1"></i>Σχόλια / Παρατηρήσεις</div>
+                                <div class="fs-6">
+                                    {% if bid.notes %}
+                                        {{ bid.notes }}
+                                    {% else %}
+                                        <em class="text-muted small">Κανένα σχόλιο</em>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
                         <table class="table table-sm table-bordered bg-white shadow-sm">
                             <thead class="table-secondary text-center small fw-bold">
                                 <tr>
@@ -166,7 +238,7 @@
                                     <th>ΤΙΜΗ ΜΟΝ.</th>
                                     <th>ΕΚΠΤΩΣΗ</th>
                                     <th>ΦΠΑ %</th>
-                                    <th>ΣΥΝΟΛΟ</th>
+                                    <th>ΣΥΝΟΛΟ (NET)</th>
                                     <th>ΕΝΕΡΓΕΙΑ</th>
                                 </tr>
                             </thead>
@@ -179,28 +251,48 @@
                                     </td>
                                     <td>{{ "%.2f"|format(line.qty) }}</td>
                                     <td>{{ "%.2f"|format(line.unit_price) }} €</td>
-                                    <td>{{ "%.2f"|format(line.discount_pct or 0) }}%</td>
+                                    
+                                    <td>
+                                        {% if line.discount_type == 'pct' and line.discount_pct and line.discount_pct > 0 %}
+                                            <span class="text-danger">-{{ "%.2f"|format(line.discount_pct) }}%</span>
+                                        {% elif line.discount_type == 'amt' and line.discount_amount and line.discount_amount > 0 %}
+                                            <span class="text-danger">-{{ "%.2f"|format(line.discount_amount) }} €</span>
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+
                                     <td>{{ line.vat_pct or 24 }}%</td>
                                     <td class="fw-bold">{{ "%.2f"|format(line.line_total) }} €</td>
                                     <td>
                                         {% set is_awarded = false %}
+                                        
                                         {% if not line.is_combo and line.request_item_id in awards and awards[line.request_item_id].bid_id == bid.id %}
                                             {% set is_awarded = true %}
-                                        {% elif line.is_combo and shipping_award and shipping_award.bid_id == bid.id %}
+                                        {% elif line.is_combo and bid.id in shipping_winning_bid_ids %}
                                             {% set is_awarded = true %}
                                         {% endif %}
 
                                         {% if is_awarded %}
+                                            {% if rfq.status != 'closed' %}
                                             <form method="post" action="{{ url_for('unaward_item', req_id=rfq.id) }}">
                                                 <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
+                                                <input type="hidden" name="bid_id" value="{{ bid.id }}">
                                                 <button type="submit" class="btn btn-xs btn-danger px-3 shadow-sm">Ακύρωση</button>
                                             </form>
+                                            {% else %}
+                                                <span class="badge bg-secondary">Οριστικοποιήθηκε</span>
+                                            {% endif %}
                                         {% else %}
+                                            {% if rfq.status != 'closed' %}
                                             <form method="post" action="{{ url_for('award_item', req_id=rfq.id) }}">
                                                 <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
                                                 <input type="hidden" name="bid_line_id" value="{{ line.id }}">
-                                                <button type="submit" class="btn btn-xs btn-success px-3 shadow-sm" {% if rfq.status == 'closed' %}disabled{% endif %}>Ανάθεση</button>
+                                                <button type="submit" class="btn btn-xs btn-success px-3 shadow-sm">Ανάθεση</button>
                                             </form>
+                                            {% else %}
+                                                <button disabled class="btn btn-xs btn-outline-secondary px-3 shadow-sm">Ανάθεση</button>
+                                            {% endif %}
                                         {% endif %}
                                     </td>
                                 </tr>
@@ -216,12 +308,89 @@
 </div>
 {% endif %}
 
-<div class="d-flex gap-2 mt-5 mb-4">
+<div class="d-flex align-items-center gap-2 mt-5 mb-4 p-3 bg-white border rounded shadow-sm">
     {% if is_editable_by_current_user(rfq) or session.get('role') == 'chief' %}
-    <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-primary px-4 shadow-sm">
-        <i class="bi bi-pencil-square me-1"></i> Επεξεργασία
-    </a>
+        {% if rfq.status != 'closed' %}
+        <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-primary px-4 shadow-sm">
+            <i class="bi bi-pencil-square me-1"></i> Επεξεργασία Ζήτησης
+        </a>
+        {% endif %}
     {% endif %}
-    <a href="{{ url_for('company_dashboard') }}" class="btn btn-outline-secondary px-4 shadow-sm">Επιστροφή</a>
+
+    <div class="ms-auto d-flex gap-2">
+        <a href="{{ url_for('company_dashboard') }}" class="btn btn-outline-secondary px-4 shadow-sm">Επιστροφή</a>
+
+        {% if rfq.status != 'closed' and awarded_summary %}
+        <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#finalizeModal">
+            <i class="bi bi-check-circle-fill me-1"></i> Οριστική Ανάθεση
+        </button>
+        {% endif %}
+    </div>
 </div>
+
+{% if rfq.status != 'closed' and awarded_summary %}
+<div class="modal fade" id="finalizeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content border-0 shadow">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold"><i class="bi bi-check2-all me-2"></i>Επιβεβαίωση Οριστικής Ανάθεσης</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>;</p>
+        
+        <div class="bg-light p-3 rounded border mb-4">
+            <h6 class="fw-bold text-muted mb-3 text-uppercase small">Αναλυτικη Συνοψη:</h6>
+            
+            {% for sup, data in awarded_summary.items() %}
+            <div class="mb-3 p-3 border rounded bg-white shadow-sm">
+                <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-2">
+                    <span class="fw-bold text-primary"><i class="bi bi-person-check-fill me-2"></i>{{ sup }}</span>
+                    <strong class="text-dark fs-6">{{ "%.2f"|format(data.final_total) }} €</strong>
+                </div>
+                <ul class="list-unstyled mb-2 small">
+                    {% for item in data['items'] %}
+                    <li class="d-flex justify-content-between text-muted mb-1">
+                        <span class="text-truncate pe-2">
+                            <i class="bi bi-dot"></i> {{ item.desc }} 
+                            <span class="opacity-75">
+                                ({{ "%.2f"|format(item.qty) }} x {{ "%.2f"|format(item.price) }}€)
+                                {% if item.discount_str %}<span class="text-danger fw-bold">[{{ item.discount_str }}]</span>{% endif %}
+                            </span>
+                        </span>
+                        <span class="text-nowrap fw-semibold">{{ "%.2f"|format(item.total) }} €</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                
+                {% if data.overall_discount > 0 %}
+                <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2 small text-danger">
+                    <span><strong>Συνολική Έκπτωση Προσφοράς</strong> (Αναλογική)</span>
+                    <strong>-{{ "%.2f"|format(data.overall_discount) }} €</strong>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            
+            <div class="d-flex justify-content-between mt-4 pt-3 border-top border-2 border-secondary">
+                <span class="fw-bold text-uppercase">Γενικο Συνολο (Καθαρη Αξια):</span>
+                <strong class="text-success fs-5">{{ "%.2f"|format(grand_total_awarded) }} €</strong>
+            </div>
+        </div>
+        
+        <div class="alert alert-warning small mb-0 shadow-sm border-warning">
+            <i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i> <strong>Προσοχή:</strong> Μετά την οριστικοποίηση, η ζήτηση θα κλείσει και οι προμηθευτές θα ενημερωθούν επίσημα για τα είδη που κέρδισαν. Δεν θα μπορείτε πλέον να τροποποιήσετε τις αναθέσεις.
+        </div>
+      </div>
+      <div class="modal-footer bg-light">
+        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Άκυρο</button>
+        <form method="post" action="{{ url_for('finalize_award', req_id=rfq.id) }}">
+            <button type="submit" class="btn btn-success px-4 fw-bold"><i class="bi bi-lock-fill me-1"></i>Οριστικοποίηση</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
