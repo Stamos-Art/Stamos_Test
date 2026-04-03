@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <h3 class="card-title mb-3">Επεξεργασία Ζήτησης #{{ rfq.id }}</h3>
+    <form method="post">
+
+      <div class="mb-3">
+        <label class="form-label">Τίτλος ζήτησης</label>
+        <input class="form-control" name="title" value="{{ rfq.title }}" required />
+      </div>
+
+      <h5 class="mt-1 d-flex justify-content-between align-items-center">
+        Είδη
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addRowEdit()">+ Προσθήκη</button>
+      </h5>
+      <table class="table align-middle" id="items-table-edit">
+        <thead>
+          <tr>
+            <th style="width:45%">Περιγραφή είδους</th>
+            <th style="width:20%">Μονάδες</th>
+            <th style="width:20%">Ποσότητα</th>
+            <th style="width:15%" class="text-end">-</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for it in rfq.items %}
+          <tr>
+            <td><input class="form-control item-input" name="item_desc[]" value="{{ it.description }}" required /></td>
+            <td>
+              <select class="form-select item-input" name="item_unit[]" required>
+                {% set units = ['τμχ','m','kg','tn','σετ','κουτί','λίτρα','m2','m3','παλέτα'] %}
+                <option value="">- επιλέξτε -</option>
+                {% for u in units %}<option value="{{ u }}" {% if it.unit==u %}selected{% endif %}>{{ u }}</option>{% endfor %}
+              </select>
+            </td>
+            <td><input type="number" step="0.01" min="0" class="form-control item-input" name="item_qty[]" value="{{ '%.2f'|format(it.quantity) }}" required /></td>
+            <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">Διαγραφή</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="mb-3">
+        <label class="form-label">Γενικές λεπτομέρειες (προαιρετικά)</label>
+        <textarea class="form-control" name="details" rows="4">{{ rfq.description or '' }}</textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Αποστολή σε προμηθευτές</label>
+        <div class="d-flex gap-2 mb-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="supSelectAllEdit(true)">Επιλογή όλων</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="supSelectAllEdit(false)">Καθαρισμός</button>
+        </div>
+        {% set selected = rfq.allowed_suppliers | map(attribute='supplier_username') | list %}
+        <select class="form-select select2" name="suppliers[]" id="suppliersSelectEdit" multiple required>
+          {% for uname, dname in suppliers %}
+            <option value="{{ uname }}" {% if uname in selected %}selected{% endif %}>{{ dname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Τόπος παράδοσης</label>
+          <input class="form-control" name="delivery_location" value="{{ rfq.delivery_location or '' }}" required />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Προθεσμία υποβολής προσφορών</label>
+          <input type="date" class="form-control" name="submit_deadline" value="{{ rfq.submit_deadline.strftime('%Y-%m-%d') if rfq.submit_deadline else '' }}" required />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Προθεσμία παράδοσης στον τόπο</label>
+          <input type="date" class="form-control" name="delivery_deadline" value="{{ rfq.delivery_deadline.strftime('%Y-%m-%d') if rfq.delivery_deadline else '' }}" required />
+        </div>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button id="btnSubmitEdit" class="btn btn-primary" type="submit">Αποθήκευση αλλαγών</button>
+        <a class="btn btn-link" href="{{ url_for('company_dashboard') }}">Ακύρωση</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function addRowEdit() {
+  const tbody = document.querySelector('#items-table-edit tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="form-control item-input" name="item_desc[]" required /></td>
+    <td>
+      <select class="form-select item-input" name="item_unit[]" required>
+        <option value="">- επιλέξτε -</option>
+        <option>τμχ</option><option>m</option><option>kg</option><option>tn</option>
+        <option>σετ</option><option>κουτί</option><option>λίτρα</option>
+        <option>m2</option><option>m3</option><option>παλέτα</option>
+      </select>
+    </td>
+    <td><input type="number" step="0.01" min="0" class="form-control item-input" name="item_qty[]" required /></td>
+    <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">Διαγραφή</button></td>`;
+  tbody.appendChild(tr);
+}
+
+function supSelectAllEdit(flag) {
+  const $sel = $('#suppliersSelectEdit');
+  if (!$sel.length) return;
+  const vals = flag ? $sel.find('option').map(function(){return this.value}).get() : null;
+  $sel.val(vals).trigger('change');
+}
+</script>
+{% endblock %}

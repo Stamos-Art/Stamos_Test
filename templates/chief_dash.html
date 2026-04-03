@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Πίνακας Ελέγχου Διευθυντή (Chief)</h3>
+</div>
+
+<h5 class="mt-4 text-warning"><i class="bi bi-exclamation-circle-fill"></i> Σε εκκρεμότητα για έγκριση</h5>
+<div class="card shadow-sm mb-4 border-warning">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Τίτλος</th>
+            <th>Δημιουργός</th>
+            <th>Δημιουργία</th>
+            <th class="text-end">Ενέργειες</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rfqs_pending %}
+            <tr>
+              <td class="fw-bold">#{{ r.id }}</td>
+              <td>{{ r.title }}</td>
+              <td>{{ r.created_by }}</td>
+              <td>{{ r.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+              <td class="text-end">
+                  <a class="btn btn-sm btn-primary" href="{{ url_for('company_request_detail', req_id=r.id) }}">Έλεγχος & Έγκριση</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-center py-3 text-muted">Καμία ζήτηση σε εκκρεμότητα.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+
+<h5 class="mt-5 text-secondary"><i class="bi bi-journal-text"></i> Ιστορικό / Λοιπές Ζητήσεις</h5>
+<div class="card shadow-sm">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Τίτλος</th>
+            <th>Κατάσταση</th>
+            <th>Τελευταία Ενημέρωση</th>
+            <th class="text-end">Προβολή</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rfqs_other %}
+            {% set p = phase_info(r) %}
+            <tr>
+              <td class="fw-bold">#{{ r.id }}</td>
+              <td>{{ r.title }}</td>
+              <td><span class="{{ p.badge }}"><i class="bi {{ p.icon }} me-1"></i>{{ p.label }}</span></td>
+              <td>{{ (r.approved_at or r.created_at).strftime('%d/%m/%Y %H:%M') }}</td>
+              <td class="text-end">
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('company_request_detail', req_id=r.id) }}">Λεπτομέρειες</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-center py-3 text-muted">Καμία εγγραφή στο ιστορικό.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+{% endblock %}

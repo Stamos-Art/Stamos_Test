@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if is_rfq_closed %}
+    {% if my_awards %}
+        <div class="alert alert-success shadow-sm mb-4 border-success p-4">
+            <div class="d-flex align-items-center">
+                <i class="bi bi-trophy-fill display-4 text-success me-4"></i>
+                <div>
+                    <h4 class="alert-heading fw-bold mb-1">Συγχαρητήρια! Έχετε κερδίσει σε αυτή την παραγγελία.</h4>
+                    <p class="mb-0 fs-6">Η ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong> οριστικοποιήθηκε και σας έχουν ανατεθεί τα παρακάτω είδη. Παρακαλούμε προχωρήστε στην εκτέλεση της παραγγελίας.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-5 border-top border-success border-3">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 text-success fw-bold"><i class="bi bi-card-checklist me-2"></i>Στοιχεία Τελικής Παραγγελίας (Purchase Order)</h5>
+                <span class="badge bg-light text-dark border">Ζήτηση #{{ rfq.id }}</span>
+            </div>
+            <div class="card-body p-4">
+                <div class="row mb-4 bg-light p-3 rounded border">
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-geo-alt me-1"></i>Τοπος Παραδοσης</p>
+                        <p class="mb-0 fw-bold">{{ rfq.delivery_location or '-' }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-person me-1"></i>Υπευθυνος Παραλαβης</p>
+                        <p class="mb-0 fw-bold">{{ rfq.receiving_manager or '-' }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-telephone me-1"></i>Τηλεφωνο Επικοινωνιας</p>
+                        <p class="mb-0 fw-bold">{{ rfq.phone or '-' }}</p>
+                    </div>
+                </div>
+
+                <h6 class="fw-bold mb-3">Είδη προς Παράδοση:</h6>
+                <div class="table-responsive mb-4">
+                    <table class="table table-bordered align-middle text-center">
+                        <thead class="table-success">
+                            <tr>
+                                <th class="text-start ps-3">Περιγραφή Είδους</th>
+                                <th>Ποσότητα</th>
+                                <th>Τιμή Μον.</th>
+                                <th>Σύνολο Γραμμής (Καθαρό)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for aw in my_awards %}
+                            <tr>
+                                <td class="text-start ps-3 fw-bold">
+                                    {% if not aw.request_item_id %}<i class="bi bi-truck me-2 text-primary"></i>{% endif %}
+                                    {% set req_item = rfq.items|selectattr("id", "equalto", aw.request_item_id)|first if aw.request_item_id else None %}
+                                    {{ req_item.description if req_item else ("Μεταφορικά / Έξοδα Αποστολής" if not aw.request_item_id else "Άγνωστο Είδος") }}
+                                </td>
+                                <td>{{ "%.2f"|format(aw.qty) }}</td>
+                                <td>{{ "%.2f"|format(aw.unit_price) }} €</td>
+                                <td class="fw-bold">{{ "%.2f"|format(aw.line_total) }} €</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="row justify-content-end">
+                    <div class="col-md-5">
+                        <table class="table table-sm table-borderless text-end">
+                            <tr>
+                                <td class="text-muted">Αρχικό Υποσύνολο:</td>
+                                <td class="fw-bold">{{ "%.2f"|format(my_awards_total) }} €</td>
+                            </tr>
+                            {% if overall_discount_amount > 0 %}
+                            <tr class="text-danger">
+                                <td>Αναλογική Γενική Έκπτωση:</td>
+                                <td class="fw-bold">-{{ "%.2f"|format(overall_discount_amount) }} €</td>
+                            </tr>
+                            {% endif %}
+                            <tr class="border-top border-2">
+                                <td class="fs-5 text-uppercase fw-bold pt-2">Τελικο Καθαρο Ποσο:</td>
+                                <td class="fs-4 text-success fw-bold pt-2">{{ "%.2f"|format(final_award_total) }} €</td>
+                            </tr>
+                        </table>
+                        <div class="text-muted small text-end">* Στο παραπάνω ποσό δεν περιλαμβάνεται ΦΠΑ. <br>Προσθέστε τον αντίστοιχο ΦΠΑ ανά είδος κατά την τιμολόγηση.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="d-flex justify-content-between align-items-center mt-5 mb-3 border-bottom pb-2">
+            <h4 class="text-muted mb-0"><i class="bi bi-clock-history me-2"></i>Η Αρχική σας Προσφορά</h4>
+            <a class="btn btn-outline-secondary" href="{{ url_for('supplier_dashboard') }}">Επιστροφή στο Dashboard</a>
+        </div>
+        
+    {% else %}
+        <div class="alert alert-secondary shadow-sm mb-5 p-4 text-center border">
+            <i class="bi bi-info-circle fs-1 text-muted d-block mb-3"></i>
+            <h4 class="alert-heading fw-bold">Η ζήτηση έχει κλείσει</h4>
+            <p class="mb-0 fs-6">Δυστυχώς, δεν σας ανατέθηκε κάποιο είδος σε αυτή την παραγγελία. Σας ευχαριστούμε για τη συμμετοχή σας!</p>
+        </div>
+        
+        <div class="d-flex justify-content-between align-items-center mt-5 mb-3 border-bottom pb-2">
+            <h4 class="text-muted mb-0"><i class="bi bi-clock-history me-2"></i>Η Αρχική σας Προσφορά</h4>
+            <a class="btn btn-outline-secondary" href="{{ url_for('supplier_dashboard') }}">Επιστροφή στο Dashboard</a>
+        </div>
+    {% endif %}
+{% endif %}
+<div class="card border-0 shadow-sm mb-4 {% if is_rfq_closed %}opacity-75{% endif %}">
+  <div class="card-body p-4">
+    <h4 class="mb-4 text-center fw-bold">
+        {% if is_rfq_closed %}Αρχικό Δελτίο Προσφοράς{% else %}Υποβολή Προσφοράς{% endif %}
+    </h4>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="p-3 border rounded bg-white shadow-sm text-center h-100">
+                <i class="bi bi-calendar-check text-primary fs-3 d-block mb-2"></i>
+                <div class="text-muted small text-uppercase fw-semibold">Υποβολή έως</div>
+                <div class="fs-5 fw-bold">{{ rfq.submit_deadline.strftime('%d/%m/%Y') if rfq.submit_deadline else '-' }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="p-3 border rounded bg-white shadow-sm text-center h-100">
+                <i class="bi bi-truck text-info fs-3 d-block mb-2"></i>
+                <div class="text-muted small text-uppercase fw-semibold">Επιθυμητή Παράδοση</div>
+                <div class="fs-5 fw-bold">{{ rfq.delivery_deadline.strftime('%d/%m/%Y') if rfq.delivery_deadline else '-' }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="p-3 border rounded bg-white shadow-sm text-center h-100">
+                <i class="bi bi-geo-alt text-success fs-3 d-block mb-2"></i>
+                <div class="text-muted small text-uppercase fw-semibold">Τόπος Παράδοσης</div>
+                <div class="fs-5 fw-bold text-truncate">{{ rfq.delivery_location or '-' }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if bid and not is_rfq_closed %}
+    <div class="mb-4 text-center">
+        {% if bid.status == 'submitted' %}
+            <span class="badge bg-success px-3 py-2 fs-6"><i class="bi bi-check-all me-1"></i> Η προσφορά έχει υποβληθεί</span>
+        {% else %}
+            <span class="badge bg-warning text-dark px-3 py-2 fs-6"><i class="bi bi-pencil me-1"></i> Πρόχειρη Αποθήκευση</span>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" id="bid-form">
+      <h5 class="mb-3 border-bottom pb-2">Τιμολόγηση Ειδών</h5>
+      <div class="table-responsive">
+        <table id="price-table" class="table table-sm align-middle table-bordered">
+          <thead class="table-light text-center">
+            <tr>
+              <th style="width:50px">#</th>
+              <th>Περιγραφή</th>
+              <th style="width:90px">Ποσότητα</th>
+              <th style="width:130px">Τιμή Μον. (€)</th>
+              <th style="width:180px">Έκπτωση Είδους</th>
+              <th style="width:100px">ΦΠΑ %</th>
+              <th style="width:130px">Σύνολο</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in rfq.items %}
+            {% set line_prefill = item_prefill[it.id] if item_prefill and it.id in item_prefill else {} %}
+            <tr data-line="rfq" data-qty="{{ it.quantity }}">
+              <td class="text-center text-muted small">{{ loop.index }}</td>
+              <td>{{ it.description }}</td>
+              <td class="text-center fw-bold">{{ '%.2f'|format(it.quantity) }}</td>
+              <td>
+                <input type="number" step="0.01" min="0" class="price form-control form-control-sm text-end" 
+                       name="item_price_{{ it.id }}" value="{{ '%.2f'|format(line_prefill.price) if line_prefill.price else '' }}" 
+                       {{ "disabled" if readonly else "" }} oninput="recalcFix()">
+              </td>
+              <td>
+                <div class="input-group input-group-sm">
+                    <input type="number" step="0.01" min="0" class="line-disc-val form-control text-end" 
+                           name="item_discount_{{ it.id }}" value="{{ '%.2f'|format(line_prefill.disc) if line_prefill.disc else '' }}" 
+                           {{ "disabled" if readonly else "" }} oninput="recalcFix()">
+                    <select class="form-select line-disc-type" name="item_discount_type_{{ it.id }}" 
+                            style="max-width: 65px;" {{ "disabled" if readonly else "" }} onchange="recalcFix()">
+                        <option value="pct" {{ 'selected' if not line_prefill.disc_type or line_prefill.disc_type == 'pct' }}>%</option>
+                        <option value="amt" {{ 'selected' if line_prefill.disc_type == 'amt' }}>€</option>
+                    </select>
+                </div>
+              </td>
+              <td>
+                <select name="item_vat_{{ it.id }}" class="form-select form-select-sm vat-item" 
+                        {{ "disabled" if readonly else "" }} onchange="recalcFix()">
+                    <option value="24" {{ 'selected' if line_prefill.vat == 24 or (not line_prefill.vat and vat_pct_prefill == 24) }}>24%</option>
+                    <option value="13" {{ 'selected' if line_prefill.vat == 13 }}>13%</option>
+                    <option value="6" {{ 'selected' if line_prefill.vat == 6 }}>6%</option>
+                    <option value="0" {{ 'selected' if line_prefill.vat == 0 }}>0%</option>
+                </select>
+              </td>
+              <td class="text-end fw-bold"><span class="line-total">0.00</span> €</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="row mt-4 g-3">
+          <div class="col-md-4">
+              <label class="form-label small fw-bold">Συνολική Έκπτωση Προσφοράς</label>
+              <div class="input-group input-group-sm">
+                  <input type="number" step="0.01" min="0" id="overall_discount_val" name="overall_discount_val" 
+                         class="form-control text-end" value="{{ overall_prefill or '' }}" 
+                         {{ "disabled" if readonly else "" }} oninput="recalcFix()">
+                  <select class="form-select" id="overall_discount_type" name="overall_discount_type" 
+                          style="max-width: 80px;" {{ "disabled" if readonly else "" }} onchange="recalcFix()">
+                      <option value="pct" {{ 'selected' if not discount_type or discount_type == 'pct' }}>%</option>
+                      <option value="amt" {{ 'selected' if discount_type == 'amt' }}>€</option>
+                  </select>
+              </div>
+          </div>
+          <div class="col-md-4">
+              <label class="form-label small fw-bold">Μεταφορικά (€)</label>
+              <input type="number" step="0.01" min="0" name="shipping_cost" class="form-control form-control-sm text-end" 
+                     value="{{ shipping_prefill or '' }}" {{ "disabled" if readonly else "" }} oninput="recalcFix()">
+          </div>
+          <div class="col-md-4">
+              <label class="form-label small fw-bold">Ημερομηνία Παράδοσης</label>
+              <input type="date" name="proposed_delivery_date" class="form-control form-control-sm" 
+                     value="{{ bid.proposed_delivery_date.strftime('%Y-%m-%d') if bid and bid.proposed_delivery_date else '' }}" 
+                     {{ "disabled" if readonly else "" }}>
+          </div>
+      </div>
+
+      <div class="row g-3 mt-3">
+        <div class="col-md-4"><div class="p-2 border rounded bg-light text-center small"><div class="text-muted">Αρχική Αξία</div><div class="fw-bold"><span id="sum-subtotal">0.00</span> €</div></div></div>
+        <div class="col-md-4"><div class="p-2 border rounded bg-light text-center small"><div class="text-muted">Συν. Έκπτωση</div><div class="fw-bold text-danger"><span id="sum-discount">0.00</span> €</div></div></div>
+        <div class="col-md-4"><div class="p-2 border rounded bg-light text-center small"><div class="text-muted">Σύνολο ΦΠΑ</div><div class="fw-bold"><span id="sum-vat">0.00</span> €</div></div></div>
+      </div>
+
+      <div class="d-flex align-items-center justify-content-end mt-4 p-3 bg-primary text-white rounded shadow-sm">
+        <div class="me-3 fs-5 opacity-75">Τελικό Σύνολο Προσφοράς:</div>
+        <div class="display-6 fw-bold"><span id="sum-grand">0.00</span> €</div>
+      </div>
+
+      <div class="mt-4">
+        <label class="form-label small fw-bold">Σχόλια / Παρατηρήσεις</label>
+        <textarea class="form-control" name="notes" rows="3" {{ "disabled" if readonly else "" }} 
+                  placeholder="Πρόσθετοι όροι...">{{ bid.notes if bid else '' }}</textarea>
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        {% if not readonly %}
+            <button type="submit" name="action" value="submit" class="btn btn-primary btn-lg px-4">
+                <i class="bi bi-send-check me-2"></i>Υποβολή
+            </button>
+            <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary btn-lg">
+                Προσωρινή Αποθήκευση
+            </button>
+        {% elif is_rfq_closed %}
+            {% else %}
+            <div class="alert alert-warning w-100 mb-0 py-2 small text-center">
+                <i class="bi bi-lock-fill me-2"></i>Η επεξεργασία είναι προσωρινά κλειδωμένη καθώς γίνεται ανάλυση των προσφορών.
+            </div>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function N(x){ const v = parseFloat((x ?? '').toString().replace(',', '.')); return isNaN(v) ? 0 : v; }
+function F(x){ return (Math.round(x*100)/100).toFixed(2); }
+
+function recalcFix(){
+  let grossTotal = 0;
+  let totalVat = 0;
+  let itemsDiscountAmt = 0;
+  
+  document.querySelectorAll('#price-table tr[data-line="rfq"]').forEach(tr => {
+    const qty = N(tr.getAttribute('data-qty'));
+    const price = N(tr.querySelector('.price').value);
+    const lineDiscVal = N(tr.querySelector('.line-disc-val').value);
+    const lineDiscType = tr.querySelector('.line-disc-type').value;
+    const vatPct = N(tr.querySelector('.vat-item').value);
+    
+    const lineGross = qty * price;
+    let lineDiscMoney = 0;
+
+    if(lineDiscType === 'pct') {
+        lineDiscMoney = lineGross * (lineDiscVal / 100);
+    } else {
+        lineDiscMoney = lineDiscVal;
+    }
+    
+    const lineNet = Math.max(0, lineGross - lineDiscMoney);
+    const lineVat = lineNet * (vatPct / 100);
+    
+    tr.querySelector('.line-total').textContent = F(lineNet);
+    
+    grossTotal += lineGross;
+    itemsDiscountAmt += lineDiscMoney;
+    totalVat += lineVat;
+  });
+
+  const overallVal = N(document.getElementById('overall_discount_val').value);
+  const overallType = document.getElementById('overall_discount_type').value;
+  const shipping = N(document.querySelector('input[name="shipping_cost"]').value);
+  
+  const subtotalAfterLines = grossTotal - itemsDiscountAmt;
+  let overallDiscMoney = (overallType === 'pct') ? (subtotalAfterLines * overallVal / 100) : overallVal;
+  
+  const totalCombinedDiscount = itemsDiscountAmt + overallDiscMoney;
+  const shipVat = shipping * 0.24; 
+  const grandTotal = subtotalAfterLines - overallDiscMoney + shipping + totalVat + shipVat;
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = F(v); };
+  
+  setTxt('sum-subtotal', grossTotal);
+  setTxt('sum-discount', totalCombinedDiscount);
+  setTxt('sum-vat', totalVat + shipVat);
+  setTxt('sum-grand', grandTotal);
+}
+
+document.addEventListener('DOMContentLoaded', recalcFix);
+</script>
+{% endblock %}
