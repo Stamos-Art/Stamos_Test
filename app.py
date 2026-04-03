@@ -45,10 +45,10 @@ def is_editable_by_current_user(rfq: "RequestRFQ") -> bool:
 def get_phase_key(rfq: "RequestRFQ") -> str:
     if rfq.status == "denied": return "denied"
     if rfq.status == "pending": return "awaiting_approval"
-    if rfq.status == "closed":
-        return "received" if rfq.winning_bid_id else "closed"
+    if rfq.status == "pending_final_approval": return "pending_final_approval"
+    if rfq.status == "received": return "received" # ΝΕΟ: Αν ολοκληρώθηκε η παραλαβή
+    if rfq.status == "closed": return "awarded"    # CLOSED = Ανατέθηκε
     if rfq.status == "open":
-        if rfq.winning_bid_id: return "awarded"
         count_bids = len(rfq.bids or [])
         return "offers_received" if count_bids > 0 else "awaiting_offers"
     return rfq.status
@@ -57,6 +57,7 @@ def phase_info(rfq: "RequestRFQ"):
     key = get_phase_key(rfq)
     mapping = {
         "awaiting_approval": {"label": "Προς Έγκριση", "badge": "badge bg-warning text-dark", "icon": "bi-hourglass-split"},
+        "pending_final_approval": {"label": "Αναμονή Τελικής Έγκρισης", "badge": "badge bg-danger", "icon": "bi-shield-lock"},
         "awaiting_offers": {"label": "Αναμονή Προσφορών", "badge": "badge bg-info text-dark", "icon": "bi-inbox"},
         "offers_received": {"label": "Υποβλήθηκαν Προσφορές", "badge": "badge bg-primary", "icon": "bi-envelope-check"},
         "awarded": {"label": "Ανατέθηκε", "badge": "badge bg-success", "icon": "bi-trophy"},
@@ -164,7 +165,6 @@ def new_request():
         db.session.add(rfq)
         db.session.flush()
 
-        # ΔΙΟΡΘΩΣΗ: Αποθήκευση των Ειδών
         item_descs = request.form.getlist("item_desc[]")
         item_units = request.form.getlist("item_unit[]")
         item_qtys = request.form.getlist("item_qty[]")
@@ -179,7 +179,6 @@ def new_request():
                 qty = 1.0
             db.session.add(RequestItem(request_id=rfq.id, description=desc, unit=unit, quantity=qty))
 
-        # ΔΙΟΡΘΩΣΗ: Αποθήκευση των Επιλεγμένων Προμηθευτών
         selected_suppliers = request.form.getlist("suppliers[]")
         for uname in selected_suppliers:
             db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
@@ -188,8 +187,15 @@ def new_request():
         flash("Η ζήτηση δημιουργήθηκε επιτυχώς.", "success")
         return redirect(url_for("company_dashboard"))
 
+    clone_id = request.args.get("clone_id")
+    clone_rfq = None
+    if clone_id:
+        clone_rfq = RequestRFQ.query.get(int(clone_id))
+
     suppliers_list = [(u.username, u.display_name) for u in suppliers]
-    return render_template("new_request.html", suppliers=suppliers_list, cost_centers=cost_centers)
+    
+    return render_template("new_request.html", suppliers=suppliers_list, cost_centers=cost_centers, clone_rfq=clone_rfq)
+
 
 @app.route("/company/requests/<int:req_id>")
 @require_roles("company", "chief")
@@ -198,16 +204,12 @@ def company_request_detail(req_id):
     bids = Bid.query.filter_by(request_id=req_id).all()
     
     awards_list = ItemAward.query.filter_by(request_id=req_id).all()
-    # Λεξικό για τα κανονικά υλικά (item_id != None)
     awards = {aw.request_item_id: aw for aw in awards_list if aw.request_item_id is not None}
     
-    # Πλέον παίρνουμε ΟΛΕΣ τις αναθέσεις μεταφορικών (σε λίστα)
     shipping_awards = [aw for aw in awards_list if aw.request_item_id is None]
-    
-    # Εξάγουμε μια λίστα με τα ID των Bids που έχουν κερδίσει μεταφορικά.
     shipping_winning_bid_ids = {aw.bid_id for aw in shipping_awards}
 
-    # ---> ΝΕΟΣ ΚΩΔΙΚΑΣ: Αναλυτική Σύνοψη Ειδών και Εκπτώσεων ανά Προμηθευτή <---
+    # Αναλυτική Σύνοψη Ειδών και Εκπτώσεων
     awarded_summary = {}
     grand_total_awarded = Decimal(0)
     
@@ -216,11 +218,9 @@ def company_request_detail(req_id):
         val = aw.line_total or Decimal(0)
         bid = aw.bid
         
-        # Ψάχνουμε τη γραμμή της προσφοράς για να δούμε αν είχε έκπτωση το κάθε είδος
         bl = BidLine.query.get(aw.bid_line_id) if aw.bid_line_id else None
         
         if sup not in awarded_summary:
-            # Αν ο προμηθευτής είχε δώσει συνολική έκπτωση, βρίσκουμε το πραγματικό % της έκπτωσης
             effective_disc_pct = Decimal(0)
             if bid and bid.subtotal and bid.subtotal > 0 and bid.discount_total and bid.discount_total > 0:
                 effective_disc_pct = bid.discount_total / bid.subtotal
@@ -235,14 +235,12 @@ def company_request_detail(req_id):
             
         awarded_summary[sup]['subtotal'] += val
         
-        # Βρίσκουμε την περιγραφή του είδους
         if aw.request_item_id is None:
             desc = "Μεταφορικά / Έξοδα Αποστολής"
         else:
             req_item = next((it for it in rfq.items if it.id == aw.request_item_id), None)
             desc = req_item.description if req_item else "Άγνωστο είδος"
             
-        # Καταγράφουμε αν υπάρχει ειδική έκπτωση ΜΟΝΟ σε αυτό το είδος (πχ -10% ή -5€)
         item_disc_str = ""
         if bl:
             if bl.discount_type == 'pct' and bl.discount_pct and bl.discount_pct > 0:
@@ -250,7 +248,6 @@ def company_request_detail(req_id):
             elif bl.discount_type == 'amt' and bl.discount_amount and bl.discount_amount > 0:
                 item_disc_str = f"-{bl.discount_amount}€"
                 
-        # Προσθέτουμε το είδος στη λίστα
         awarded_summary[sup]['items'].append({
             'desc': desc,
             'qty': aw.qty or Decimal(1),
@@ -259,23 +256,83 @@ def company_request_detail(req_id):
             'total': val
         })
 
-    # Υπολογισμός τελικών ποσών εφαρμογής της γενικής έκπτωσης (Αναλογικά)
     for sup, data in awarded_summary.items():
         data['overall_discount'] = data['subtotal'] * data['effective_disc_pct']
         data['final_total'] = data['subtotal'] - data['overall_discount']
         grand_total_awarded += data['final_total']
+
+    # ΝΕΟ: Ανάκτηση των Παραλαβών (Receipts) για να εμφανιστούν στη Φόρμα
+    receipts_list = ItemReceipt.query.filter_by(request_id=req_id).all()
+    receipts = {r.request_item_id: r for r in receipts_list}
 
     return render_template("company_request_detail.html", 
                            rfq=rfq, items=rfq.items, bids=bids, awards=awards, 
                            shipping_awards=shipping_awards,
                            shipping_winning_bid_ids=shipping_winning_bid_ids,
                            awarded_summary=awarded_summary,
-                           grand_total_awarded=grand_total_awarded)
+                           grand_total_awarded=grand_total_awarded,
+                           receipts=receipts) # Περνάμε το νέο λεξικό στο Template
 
+# ----------------- ΝΕΑ ROUTES ΓΙΑ ΠΑΡΑΛΑΒΗ (RECEIPTS) -----------------
+
+
+@app.route("/company/requests/<int:req_id>/save_receipt", methods=["POST"])
+@require_roles("company", "chief")
+def save_receipt(req_id):
+    rfq = RequestRFQ.query.get_or_404(req_id)
+    if rfq.status not in ['closed', 'received']:
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(url_for('company_request_detail', req_id=req_id))
+        
+    for item in rfq.items:
+        recv_qty_str = request.form.get(f"recv_qty_{item.id}")
+        
+        # ΔΙΟΡΘΩΣΗ: Ελέγχουμε αν το πεδίο έχει όντως κάποιον αριθμό μέσα και δεν είναι κενό
+        if recv_qty_str and recv_qty_str.strip():
+            try:
+                qty = Decimal(recv_qty_str.strip())
+                receipt = ItemReceipt.query.filter_by(request_id=rfq.id, request_item_id=item.id).first()
+                if not receipt:
+                    award = ItemAward.query.filter_by(request_id=rfq.id, request_item_id=item.id).first()
+                    supplier = award.supplier_name if award else "Άγνωστος"
+                    receipt = ItemReceipt(
+                        request_id=rfq.id,
+                        request_item_id=item.id,
+                        awarded_supplier=supplier
+                    )
+                    db.session.add(receipt)
+                
+                receipt.received_qty = qty
+                receipt.received_by = session.get("name")
+                receipt.received_at = datetime.utcnow()
+            except Exception:
+                # Αν γράψει κάποιος γράμματα αντί για αριθμούς, το αγνοούμε
+                pass
+    
+    db.session.commit()
+    flash("Οι ποσότητες παραλαβής αποθηκεύτηκαν επιτυχώς.", "success")
+    return redirect(url_for('company_request_detail', req_id=req_id))
+
+
+
+@app.route("/company/requests/<int:req_id>/finalize_receipt", methods=["POST"])
+@require_roles("company", "chief")
+def finalize_receipt(req_id):
+    rfq = RequestRFQ.query.get_or_404(req_id)
+    rfq.status = 'received'
+    db.session.commit()
+    flash("Η παραλαβή ολοκληρώθηκε οριστικά!", "success")
+    return redirect(url_for('company_request_detail', req_id=req_id))
+# ----------------------------------------------------------------------
 
 @app.route("/company/requests/<int:req_id>/award_item", methods=["POST"])
 @require_roles("company", "chief")
 def award_item(req_id):
+    rfq = RequestRFQ.query.get_or_404(req_id)
+    if rfq.status == 'closed' or (rfq.status == 'pending_final_approval' and session.get('role') != 'chief'):
+        flash("Δεν μπορείτε να τροποποιήσετε τις αναθέσεις σε αυτή την κατάσταση.", "danger")
+        return redirect(url_for('company_request_detail', req_id=req_id))
+
     item_id_raw = request.form.get("request_item_id")
     bid_line_id = request.form.get("bid_line_id")
     bid_line = BidLine.query.get(bid_line_id)
@@ -303,12 +360,16 @@ def award_item(req_id):
     db.session.commit()
     
     flash(f"Η ανάθεση για '{bid_line.description}' ενημερώθηκε.", "success")
-    # ΔΙΟΡΘΩΣΗ: Στέλνουμε στο URL ποιο bid.id να μείνει ανοιχτό
     return redirect(url_for('company_request_detail', req_id=req_id, open_bid=bid_line.bid_id))
 
 @app.route("/company/requests/<int:req_id>/unaward_item", methods=["POST"])
 @require_roles("company", "chief")
 def unaward_item(req_id):
+    rfq = RequestRFQ.query.get_or_404(req_id)
+    if rfq.status == 'closed' or (rfq.status == 'pending_final_approval' and session.get('role') != 'chief'):
+        flash("Δεν μπορείτε να τροποποιήσετε τις αναθέσεις σε αυτή την κατάσταση.", "danger")
+        return redirect(url_for('company_request_detail', req_id=req_id))
+
     item_id_raw = request.form.get("request_item_id")
     bid_id = request.form.get("bid_id") 
 
@@ -321,34 +382,58 @@ def unaward_item(req_id):
         db.session.delete(award)
         db.session.commit()
         flash("Η ανάθεση ακυρώθηκε.", "info")
-    # ΔΙΟΡΘΩΣΗ: Στέλνουμε στο URL ποιο bid.id να μείνει ανοιχτό
     return redirect(url_for('company_request_detail', req_id=req_id, open_bid=bid_id))
-
 
 @app.route("/company/requests/<int:req_id>/finalize_award", methods=["POST"])
 @require_roles("company", "chief")
 def finalize_award(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    awards_count = ItemAward.query.filter_by(request_id=rfq.id).count()
-    if awards_count == 0:
+    awards_list = ItemAward.query.filter_by(request_id=rfq.id).all()
+    
+    if not awards_list:
         flash("Δεν έχετε επιλέξει κανένα είδος για ανάθεση.", "warning")
         return redirect(url_for('company_request_detail', req_id=req_id))
 
-    rfq.status = 'closed'
-    db.session.commit()
-    flash(f"Η ζήτηση #{rfq.id} οριστικοποιήθηκε και έκλεισε επιτυχώς!", "success")
-    # Αλλαγή εδώ: Βγαίνει από τη ζήτηση και πάει στο αρχικό μενού
+    awarded_summary = {}
+    grand_total_awarded = Decimal(0)
+    for aw in awards_list:
+        sup = aw.supplier_name
+        val = aw.line_total or Decimal(0)
+        bid = aw.bid
+        
+        if sup not in awarded_summary:
+            effective_disc_pct = Decimal(0)
+            if bid and bid.subtotal and bid.subtotal > 0 and bid.discount_total and bid.discount_total > 0:
+                effective_disc_pct = bid.discount_total / bid.subtotal
+            awarded_summary[sup] = {'subtotal': Decimal(0), 'effective_disc_pct': effective_disc_pct}
+            
+        awarded_summary[sup]['subtotal'] += val
+
+    for sup, data in awarded_summary.items():
+        overall_discount = data['subtotal'] * data['effective_disc_pct']
+        final_total = data['subtotal'] - overall_discount
+        grand_total_awarded += final_total
+
+    if grand_total_awarded > 500 and session.get('role') == 'company':
+        rfq.status = 'pending_final_approval'
+        db.session.commit()
+        flash(f"Το συνολικό κόστος ({grand_total_awarded:.2f}€) υπερβαίνει τα 500€. Εστάλη στον Διευθυντή για τελική έγκριση.", "info")
+    else:
+        rfq.status = 'closed'
+        db.session.commit()
+        flash(f"Η ανάθεση οριστικοποιήθηκε. Η ζήτηση έκλεισε επιτυχώς!", "success")
+        
     return redirect(url_for('company_dashboard'))
 
-
-@app.route("/company/requests/<int:req_id>/delete", methods=["POST"])
-@require_roles("company", "chief")
-def delete_request(req_id):
+@app.route("/company/requests/<int:req_id>/revert_approval", methods=["POST"])
+@require_roles("chief")
+def revert_approval(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    db.session.delete(rfq)
+    rfq.status = 'open'
     db.session.commit()
-    flash("Η ζήτηση διαγράφηκε.", "warning")
-    return redirect(url_for("company_dashboard"))
+    flash("Η ζήτηση επιστράφηκε στον υπάλληλο για επανεξέταση.", "warning")
+    return redirect(url_for('company_request_detail', req_id=req_id))
+
 
 @app.route("/company/requests/<int:req_id>/edit", methods=["GET", "POST"])
 @require_roles("company", "chief")
@@ -388,7 +473,6 @@ def edit_request(req_id):
             for uname in selected_suppliers:
                 db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
 
-        # ΔΙΟΡΘΩΣΗ: Ενημέρωση των Ειδών (Αντικατάσταση παλιών με τα νέα που συμπληρώθηκαν)
         RequestItem.query.filter_by(request_id=rfq.id).delete()
         item_descs = request.form.getlist("item_desc[]")
         item_units = request.form.getlist("item_unit[]")
@@ -572,7 +656,6 @@ def edit_cost_center(cc_id):
     flash(f"Το έργο {cc.code} ενημερώθηκε επιτυχώς.", "success")
     return redirect(url_for('manage_cost_centers'))
 
-
 @app.route("/supplier")
 @require_role("supplier")
 def supplier_dashboard():
@@ -586,16 +669,26 @@ def supplier_dashboard():
     
     submitted_count = Bid.query.filter_by(supplier_name=supplier_name, status='submitted').count()
     
-    # ΑΛΛΑΓΗ ΕΔΩ: Μετράει αναθέσεις ΜΟΝΟ αν η ζήτηση είναι 'closed' (οριστικοποιημένη)
     awards_count = ItemAward.query.join(RequestRFQ).filter(
         ItemAward.supplier_name == supplier_name,
-        RequestRFQ.status == 'closed'
+        RequestRFQ.status.in_(['closed', 'received'])
     ).count()
+    
+    # ΝΕΟ: Αναζήτηση των παραγγελιών που έχουμε ΚΕΡΔΙΣΕΙ
+    awarded_awards = ItemAward.query.join(RequestRFQ).filter(
+        ItemAward.supplier_name == supplier_name,
+        RequestRFQ.status.in_(['closed', 'received'])
+    ).all()
+    
+    # ΔΙΟΡΘΩΣΗ: Φιλτράρουμε ώστε να έχουμε τα μοναδικά RFQs με βάση το request_id
+    awarded_rfqs = list({RequestRFQ.query.get(aw.request_id) for aw in awarded_awards})
+    awarded_rfqs.sort(key=lambda x: x.id, reverse=True)
     
     pending_count = len(rfqs) - submitted_count
 
     return render_template("supplier_dash.html", 
                            rfqs=rfqs, 
+                           awarded_rfqs=awarded_rfqs, # Στέλνουμε τις παραγγελίες
                            bids_map=bids_map,
                            pending_count=max(0, pending_count),
                            submitted_count=submitted_count,
@@ -619,8 +712,11 @@ def supplier_bid(req_id):
     current_user = User.query.filter_by(username=username).first()
     existing_bid = Bid.query.filter_by(request_id=req_id, supplier_id=current_user.id).first()
     
+    # Έλεγχος αν η ζήτηση έκλεισε
+    is_rfq_closed = rfq.status in ['closed', 'received']
+    
     is_locked = False
-    if existing_bid and ItemAward.query.filter_by(bid_id=existing_bid.id).first():
+    if is_rfq_closed or (existing_bid and ItemAward.query.filter_by(bid_id=existing_bid.id).first()):
         is_locked = True
 
     if request.method == "POST":
@@ -682,7 +778,6 @@ def supplier_bid(req_id):
         existing_bid.price = subtotal - final_disc + total_vat
         existing_bid.status = 'submitted' if action == 'submit' else 'draft'
         
-        # ---> Η ΔΙΟΡΘΩΣΗ: Προστέθηκαν τα 2 παρακάτω πεδία που έλειπαν <---
         existing_bid.shipping_cost = ship_price
         existing_bid.notes = request.form.get("notes")
         
@@ -708,12 +803,36 @@ def supplier_bid(req_id):
                     'vat': bl.vat_pct
                 }
 
+    # ΝΕΟ: Υπολογισμοί Purchase Order για τον Προμηθευτή
+    my_awards = []
+    my_awards_total = Decimal(0)
+    overall_discount_amount = Decimal(0)
+    final_award_total = Decimal(0)
+    
+    if is_rfq_closed and existing_bid:
+        my_awards = ItemAward.query.filter_by(request_id=req_id, bid_id=existing_bid.id).all()
+        for aw in my_awards:
+            my_awards_total += (aw.line_total or Decimal(0))
+            
+        effective_disc_pct = Decimal(0)
+        if existing_bid.subtotal and existing_bid.subtotal > 0 and existing_bid.discount_total and existing_bid.discount_total > 0:
+            effective_disc_pct = existing_bid.discount_total / existing_bid.subtotal
+            
+        overall_discount_amount = my_awards_total * effective_disc_pct
+        final_award_total = my_awards_total - overall_discount_amount
+
     return render_template("supplier_bid.html", 
                            rfq=rfq, bid=existing_bid, readonly=is_locked,
                            item_prefill=item_prefill,
                            overall_prefill=existing_bid.overall_discount_pct if existing_bid and existing_bid.overall_discount_type == 'pct' else (existing_bid.discount_total if existing_bid else 0),
                            discount_type=existing_bid.overall_discount_type if existing_bid else 'pct',
-                           shipping_prefill=existing_bid.shipping_cost if existing_bid else 0)
+                           shipping_prefill=existing_bid.shipping_cost if existing_bid else 0,
+                           my_awards=my_awards,
+                           my_awards_total=my_awards_total,
+                           overall_discount_amount=overall_discount_amount,
+                           final_award_total=final_award_total,
+                           is_rfq_closed=is_rfq_closed)
+
 
 
 def _has_column(table: str, column: str) -> bool:

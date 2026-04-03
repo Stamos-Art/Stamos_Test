@@ -21,7 +21,7 @@
     <div class="col-md-4">
         <div class="card bg-info text-white shadow-sm border-0">
             <div class="card-body text-center">
-                <h6 class="text-uppercase small opacity-75">Αναθέσεις</h6>
+                <h6 class="text-uppercase small opacity-75">Αναθέσεις Ειδών</h6>
                 <h2 class="display-4 fw-bold">{{ awards_count if awards_count is defined else 0 }}</h2>
             </div>
         </div>
@@ -29,13 +29,13 @@
 </div>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h3 class="mb-0">Ανοιχτές Ζητήσεις</h3>
+    <h3 class="mb-0">Ανοιχτές Ζητήσεις (Προς Υποβολή)</h3>
     <a href="{{ url_for('supplier_history') }}" class="btn btn-outline-secondary btn-sm">
         <i class="bi bi-clock-history"></i> Ιστορικό Προσφορών
     </a>
 </div>
 
-<div class="card shadow-sm border-0">
+<div class="card shadow-sm border-0 mb-5">
   <table class="table table-hover align-middle mb-0">
     <thead class="table-light">
       <tr>
@@ -69,7 +69,7 @@
             </span>
         </td>
         <td class="text-end">
-          <a class="btn btn-sm btn-primary px-3" href="{{ url_for('supplier_bid', req_id=r.id) }}">
+          <a class="btn btn-sm btn-primary px-3 shadow-sm" href="{{ url_for('supplier_bid', req_id=r.id) }}">
             <i class="bi bi-pencil-square me-1"></i> 
             {% if bids_map and r.id in bids_map %}Επεξεργασία{% else %}Υποβολή{% endif %}
           </a>
@@ -81,4 +81,46 @@
     </tbody>
   </table>
 </div>
+
+{% if awarded_rfqs %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0 text-success"><i class="bi bi-trophy me-1"></i> Οι Παραγγελίες μου</h3>
+</div>
+
+<div class="card shadow-sm border-0 border-success mb-5">
+  <table class="table table-hover align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th style="width:80px">ID</th>
+        <th>Τίτλος Έργου</th>
+        <th>Κατάσταση Παραγγελίας</th>
+        <th>Τοποθεσία Παράδοσης</th>
+        <th class="text-end">Προβολή Παραγγελίας</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in awarded_rfqs %}
+      <tr>
+        <td><strong>#{{ r.id }}</strong></td>
+        <td class="fw-bold">{{ r.title }}</td>
+        <td>
+            {% if r.status == 'received' %}
+                <span class="badge bg-success"><i class="bi bi-box-seam me-1"></i> Παραλήφθηκε από πελάτη</span>
+            {% else %}
+                <span class="badge bg-primary"><i class="bi bi-truck me-1"></i> Προς Παράδοση</span>
+            {% endif %}
+        </td>
+        <td><small><i class="bi bi-geo-alt text-muted"></i> {{ r.delivery_location or '-' }}</small></td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-success px-3 shadow-sm" href="{{ url_for('supplier_bid', req_id=r.id) }}">
+            <i class="bi bi-file-earmark-text me-1"></i> Παραγγελία
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% endblock %}

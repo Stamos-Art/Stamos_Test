@@ -11,10 +11,11 @@
         <form method="get" action="{{ url_for('company_dashboard') }}" class="row g-2 align-items-center">
             <div class="col-md-4">
                 <select name="phase" class="form-select" onchange="this.form.submit()">
-                    <option value="all" {% if phase == 'all' %}selected{% endif %}>Όλες οι καταστάσεις</option>
+                     <option value="all" {% if phase == 'all' %}selected{% endif %}>Όλες οι καταστάσεις</option>
                     <option value="awaiting_approval" {% if phase == 'awaiting_approval' %}selected{% endif %}>Προς Έγκριση</option>
                     <option value="awaiting_offers" {% if phase == 'awaiting_offers' %}selected{% endif %}>Αναμονή Προσφορών</option>
                     <option value="offers_received" {% if phase == 'offers_received' %}selected{% endif %}>Υποβλήθηκαν Προσφορές</option>
+                    <option value="pending_final_approval" {% if phase == 'pending_final_approval' %}selected{% endif %}>Αναμονή Τελικής Έγκρισης (>500€)</option>
                     <option value="awarded" {% if phase == 'awarded' %}selected{% endif %}>Ανατέθηκε</option>
                     <option value="received" {% if phase == 'received' %}selected{% endif %}>Παραλήφθηκε</option>
                     <option value="closed" {% if phase == 'closed' %}selected{% endif %}>Κλειστό</option>

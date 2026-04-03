@@ -14,6 +14,8 @@
     Δημιουργός: {{ rfq.created_by }} | {{ rfq.created_at.strftime('%d/%m/%Y %H:%M') if rfq.created_at else '' }}
 </p>
 
+{% set can_modify = rfq.status != 'closed' and rfq.status != 'received' and (rfq.status != 'pending_final_approval' or session.get('role') == 'chief') %}
+
 <div class="row mb-4 g-3">
     <div class="col-md-12">
         <div class="p-3 border rounded bg-white shadow-sm small">
@@ -107,6 +109,74 @@
     </div>
 </div>
 
+{% if rfq.status in ['closed', 'received'] %}
+<h5 class="mt-5 mb-3"><i class="bi bi-box-seam me-2"></i>Παραλαβή Υλικών</h5>
+<div class="card shadow-sm border-0 mb-5">
+    <div class="card-body p-0">
+        <form method="post" action="{{ url_for('save_receipt', req_id=rfq.id) }}">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0 text-center">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="text-start ps-4">Περιγραφή Είδους</th>
+                            <th>Προμηθευτής</th>
+                            <th>Παραγγελία</th>
+                            <th style="width: 180px;">Ποσότητα Παραλαβής</th>
+                            <th class="text-end pe-4">Κατάσταση</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                            {% if item.id in awards %}
+                            {% set aw = awards[item.id] %}
+                            {% set rec = receipts[item.id] if receipts and item.id in receipts else None %}
+                            {% set r_qty = rec.received_qty if rec and rec.received_qty else 0 %}
+                            {% set diff = aw.qty - r_qty %}
+                            <tr>
+                                <td class="text-start ps-4 fw-bold">{{ item.description }}</td>
+                                <td><span class="badge bg-light text-dark border"><i class="bi bi-building me-1"></i>{{ aw.supplier_name }}</span></td>
+                                <td>{{ "%.2f"|format(aw.qty) }} {{ item.unit }}</td>
+                                <td>
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" step="0.01" min="0" max="{{ aw.qty }}" class="form-control text-end" name="recv_qty_{{ item.id }}" value="{{ "%.2f"|format(r_qty) if r_qty > 0 else '' }}" placeholder="0.00" {{ 'disabled' if rfq.status == 'received' }}>
+                                        <span class="input-group-text bg-light text-muted">{{ item.unit }}</span>
+                                    </div>
+                                </td>
+                                <td class="text-end pe-4">
+                                    {% if diff <= 0 %}
+                                        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Πλήρης</span>
+                                    {% elif r_qty > 0 %}
+                                        <span class="badge bg-warning text-dark"><i class="bi bi-clock-history me-1"></i>Μερική ({{ "%.2f"|format(diff) }} υπόλοιπο)</span>
+                                    {% else %}
+                                        <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Εκκρεμεί</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            {% if rfq.status == 'closed' %}
+            <div class="p-3 bg-light border-top d-flex justify-content-between align-items-center">
+                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>Αποθηκεύστε τις ποσότητες σταδιακά (Μερική Παραλαβή) ή οριστικοποιήστε αν ήρθαν όλα.</small>
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-outline-primary px-4 shadow-sm"><i class="bi bi-save me-1"></i>Αποθήκευση Ποσοτήτων</button>
+                    <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#receiptModal">
+                        <i class="bi bi-box-seam me-1"></i> Ολοκλήρωση Παραλαβής
+                    </button>
+                </div>
+            </div>
+            {% else %}
+            <div class="p-3 bg-success-subtle border-top text-success fw-bold text-center">
+                <i class="bi bi-check-all me-2"></i> Η παραλαβή έχει ολοκληρωθεί οριστικά!
+            </div>
+            {% endif %}
+        </form>
+    </div>
+</div>
+{% endif %}
 {% if awarded_summary %}
 <div class="card border-success shadow-sm mb-5">
     <div class="card-body">
@@ -140,6 +210,7 @@
     </div>
 </div>
 {% endif %}
+
 
 {% if session.get('role') == 'chief' and rfq.status == 'pending' %}
 <div class="card border-warning shadow-sm my-5">
@@ -274,17 +345,17 @@
                                         {% endif %}
 
                                         {% if is_awarded %}
-                                            {% if rfq.status != 'closed' %}
+                                            {% if can_modify %}
                                             <form method="post" action="{{ url_for('unaward_item', req_id=rfq.id) }}">
                                                 <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
                                                 <input type="hidden" name="bid_id" value="{{ bid.id }}">
                                                 <button type="submit" class="btn btn-xs btn-danger px-3 shadow-sm">Ακύρωση</button>
                                             </form>
                                             {% else %}
-                                                <span class="badge bg-secondary">Οριστικοποιήθηκε</span>
+                                                <span class="badge bg-secondary"><i class="bi bi-lock"></i></span>
                                             {% endif %}
                                         {% else %}
-                                            {% if rfq.status != 'closed' %}
+                                            {% if can_modify %}
                                             <form method="post" action="{{ url_for('award_item', req_id=rfq.id) }}">
                                                 <input type="hidden" name="request_item_id" value="{{ line.request_item_id if not line.is_combo else 'shipping' }}">
                                                 <input type="hidden" name="bid_line_id" value="{{ line.id }}">
@@ -310,25 +381,45 @@
 
 <div class="d-flex align-items-center gap-2 mt-5 mb-4 p-3 bg-white border rounded shadow-sm">
     {% if is_editable_by_current_user(rfq) or session.get('role') == 'chief' %}
-        {% if rfq.status != 'closed' %}
+        {% if rfq.status != 'closed' and rfq.status != 'received' %}
         <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-primary px-4 shadow-sm">
             <i class="bi bi-pencil-square me-1"></i> Επεξεργασία Ζήτησης
         </a>
         {% endif %}
     {% endif %}
 
+    <a href="{{ url_for('new_request', clone_id=rfq.id) }}" class="btn btn-outline-info px-4 shadow-sm text-dark">
+        <i class="bi bi-copy me-1"></i> Δημιουργία Αντιγράφου
+    </a>
+
     <div class="ms-auto d-flex gap-2">
         <a href="{{ url_for('company_dashboard') }}" class="btn btn-outline-secondary px-4 shadow-sm">Επιστροφή</a>
 
-        {% if rfq.status != 'closed' and awarded_summary %}
-        <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#finalizeModal">
-            <i class="bi bi-check-circle-fill me-1"></i> Οριστική Ανάθεση
-        </button>
+        {% if rfq.status == 'pending_final_approval' %}
+            {% if session.get('role') == 'chief' %}
+                <form method="post" action="{{ url_for('revert_approval', req_id=rfq.id) }}" class="d-inline">
+                    <button type="submit" class="btn btn-warning px-4 shadow-sm fw-bold">
+                        <i class="bi bi-arrow-return-left me-1"></i> Επιστροφή στον Υπάλληλο
+                    </button>
+                </form>
+                <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#finalizeModal">
+                    <i class="bi bi-shield-check me-1"></i> Τελική Έγκριση & Κλείσιμο
+                </button>
+            {% else %}
+                <button class="btn btn-secondary px-4 shadow-sm fw-bold" disabled>
+                    <i class="bi bi-hourglass-split me-1"></i> Αναμονή Έγκρισης Διευθυντή
+                </button>
+            {% endif %}
+
+        {% elif rfq.status not in ['closed', 'received'] and awarded_summary %}
+            <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#finalizeModal">
+                <i class="bi bi-check-circle-fill me-1"></i> Οριστική Ανάθεση
+            </button>
         {% endif %}
     </div>
 </div>
 
-{% if rfq.status != 'closed' and awarded_summary %}
+{% if rfq.status not in ['closed', 'received'] and awarded_summary %}
 <div class="modal fade" id="finalizeModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content border-0 shadow">
@@ -337,7 +428,13 @@
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body p-4">
-        <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>;</p>
+        
+        {% if rfq.status == 'pending_final_approval' %}
+            <p class="fs-6">Ελέγξατε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>; Με την έγκρισή σας θα κλείσει οριστικά.</p>
+        {% else %}
+            <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>; 
+            <br><span class="text-muted small">Αν το ποσό υπερβαίνει τα 500€, θα ζητηθεί αυτόματα έγκριση από τον Διευθυντή.</span></p>
+        {% endif %}
         
         <div class="bg-light p-3 rounded border mb-4">
             <h6 class="fw-bold text-muted mb-3 text-uppercase small">Αναλυτικη Συνοψη:</h6>
@@ -379,13 +476,38 @@
         </div>
         
         <div class="alert alert-warning small mb-0 shadow-sm border-warning">
-            <i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i> <strong>Προσοχή:</strong> Μετά την οριστικοποίηση, η ζήτηση θα κλείσει και οι προμηθευτές θα ενημερωθούν επίσημα για τα είδη που κέρδισαν. Δεν θα μπορείτε πλέον να τροποποιήσετε τις αναθέσεις.
+            <i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i> <strong>Προσοχή:</strong> Μετά την τελική οριστικοποίηση, οι προμηθευτές θα ενημερωθούν επίσημα για τα είδη που κέρδισαν. Δεν θα μπορείτε πλέον να τροποποιήσετε τις αναθέσεις.
         </div>
       </div>
       <div class="modal-footer bg-light">
         <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Άκυρο</button>
         <form method="post" action="{{ url_for('finalize_award', req_id=rfq.id) }}">
-            <button type="submit" class="btn btn-success px-4 fw-bold"><i class="bi bi-lock-fill me-1"></i>Οριστικοποίηση</button>
+            <button type="submit" class="btn btn-success px-4 fw-bold"><i class="bi bi-lock-fill me-1"></i>Επιβεβαίωση</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if rfq.status == 'closed' %}
+<div class="modal fade" id="receiptModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold"><i class="bi bi-box-seam me-2"></i>Ολοκλήρωση Παραλαβής</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την παραλαβή για τη ζήτηση <strong>#{{ rfq.id }}</strong>;</p>
+        <div class="alert alert-info small mb-0 shadow-sm">
+            <i class="bi bi-info-circle-fill me-1"></i> Μετά την ολοκλήρωση, η ζήτηση θα σημειωθεί οριστικά ως "Παραλήφθηκε" και δεν θα μπορείτε να αλλάξετε τις ποσότητες παραλαβής.
+        </div>
+      </div>
+      <div class="modal-footer bg-light">
+        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Άκυρο</button>
+        <form method="post" action="{{ url_for('finalize_receipt', req_id=rfq.id) }}">
+            <button type="submit" class="btn btn-success px-4 fw-bold"><i class="bi bi-check-lg me-1"></i>Επιβεβαίωση</button>
         </form>
       </div>
     </div>

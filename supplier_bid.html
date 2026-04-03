@@ -1,9 +1,115 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="card border-0 shadow-sm mb-4">
+
+{% if is_rfq_closed %}
+    {% if my_awards %}
+        <div class="alert alert-success shadow-sm mb-4 border-success p-4">
+            <div class="d-flex align-items-center">
+                <i class="bi bi-trophy-fill display-4 text-success me-4"></i>
+                <div>
+                    <h4 class="alert-heading fw-bold mb-1">Συγχαρητήρια! Έχετε κερδίσει σε αυτή την παραγγελία.</h4>
+                    <p class="mb-0 fs-6">Η ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong> οριστικοποιήθηκε και σας έχουν ανατεθεί τα παρακάτω είδη. Παρακαλούμε προχωρήστε στην εκτέλεση της παραγγελίας.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-5 border-top border-success border-3">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 text-success fw-bold"><i class="bi bi-card-checklist me-2"></i>Στοιχεία Τελικής Παραγγελίας (Purchase Order)</h5>
+                <span class="badge bg-light text-dark border">Ζήτηση #{{ rfq.id }}</span>
+            </div>
+            <div class="card-body p-4">
+                <div class="row mb-4 bg-light p-3 rounded border">
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-geo-alt me-1"></i>Τοπος Παραδοσης</p>
+                        <p class="mb-0 fw-bold">{{ rfq.delivery_location or '-' }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-person me-1"></i>Υπευθυνος Παραλαβης</p>
+                        <p class="mb-0 fw-bold">{{ rfq.receiving_manager or '-' }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p class="mb-1 text-muted small text-uppercase fw-bold"><i class="bi bi-telephone me-1"></i>Τηλεφωνο Επικοινωνιας</p>
+                        <p class="mb-0 fw-bold">{{ rfq.phone or '-' }}</p>
+                    </div>
+                </div>
+
+                <h6 class="fw-bold mb-3">Είδη προς Παράδοση:</h6>
+                <div class="table-responsive mb-4">
+                    <table class="table table-bordered align-middle text-center">
+                        <thead class="table-success">
+                            <tr>
+                                <th class="text-start ps-3">Περιγραφή Είδους</th>
+                                <th>Ποσότητα</th>
+                                <th>Τιμή Μον.</th>
+                                <th>Σύνολο Γραμμής (Καθαρό)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for aw in my_awards %}
+                            <tr>
+                                <td class="text-start ps-3 fw-bold">
+                                    {% if not aw.request_item_id %}<i class="bi bi-truck me-2 text-primary"></i>{% endif %}
+                                    {% set req_item = rfq.items|selectattr("id", "equalto", aw.request_item_id)|first if aw.request_item_id else None %}
+                                    {{ req_item.description if req_item else ("Μεταφορικά / Έξοδα Αποστολής" if not aw.request_item_id else "Άγνωστο Είδος") }}
+                                </td>
+                                <td>{{ "%.2f"|format(aw.qty) }}</td>
+                                <td>{{ "%.2f"|format(aw.unit_price) }} €</td>
+                                <td class="fw-bold">{{ "%.2f"|format(aw.line_total) }} €</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="row justify-content-end">
+                    <div class="col-md-5">
+                        <table class="table table-sm table-borderless text-end">
+                            <tr>
+                                <td class="text-muted">Αρχικό Υποσύνολο:</td>
+                                <td class="fw-bold">{{ "%.2f"|format(my_awards_total) }} €</td>
+                            </tr>
+                            {% if overall_discount_amount > 0 %}
+                            <tr class="text-danger">
+                                <td>Αναλογική Γενική Έκπτωση:</td>
+                                <td class="fw-bold">-{{ "%.2f"|format(overall_discount_amount) }} €</td>
+                            </tr>
+                            {% endif %}
+                            <tr class="border-top border-2">
+                                <td class="fs-5 text-uppercase fw-bold pt-2">Τελικο Καθαρο Ποσο:</td>
+                                <td class="fs-4 text-success fw-bold pt-2">{{ "%.2f"|format(final_award_total) }} €</td>
+                            </tr>
+                        </table>
+                        <div class="text-muted small text-end">* Στο παραπάνω ποσό δεν περιλαμβάνεται ΦΠΑ. <br>Προσθέστε τον αντίστοιχο ΦΠΑ ανά είδος κατά την τιμολόγηση.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="d-flex justify-content-between align-items-center mt-5 mb-3 border-bottom pb-2">
+            <h4 class="text-muted mb-0"><i class="bi bi-clock-history me-2"></i>Η Αρχική σας Προσφορά</h4>
+            <a class="btn btn-outline-secondary" href="{{ url_for('supplier_dashboard') }}">Επιστροφή στο Dashboard</a>
+        </div>
+        
+    {% else %}
+        <div class="alert alert-secondary shadow-sm mb-5 p-4 text-center border">
+            <i class="bi bi-info-circle fs-1 text-muted d-block mb-3"></i>
+            <h4 class="alert-heading fw-bold">Η ζήτηση έχει κλείσει</h4>
+            <p class="mb-0 fs-6">Δυστυχώς, δεν σας ανατέθηκε κάποιο είδος σε αυτή την παραγγελία. Σας ευχαριστούμε για τη συμμετοχή σας!</p>
+        </div>
+        
+        <div class="d-flex justify-content-between align-items-center mt-5 mb-3 border-bottom pb-2">
+            <h4 class="text-muted mb-0"><i class="bi bi-clock-history me-2"></i>Η Αρχική σας Προσφορά</h4>
+            <a class="btn btn-outline-secondary" href="{{ url_for('supplier_dashboard') }}">Επιστροφή στο Dashboard</a>
+        </div>
+    {% endif %}
+{% endif %}
+<div class="card border-0 shadow-sm mb-4 {% if is_rfq_closed %}opacity-75{% endif %}">
   <div class="card-body p-4">
-    <h4 class="mb-4 text-center fw-bold">Υποβολή Προσφοράς</h4>
+    <h4 class="mb-4 text-center fw-bold">
+        {% if is_rfq_closed %}Αρχικό Δελτίο Προσφοράς{% else %}Υποβολή Προσφοράς{% endif %}
+    </h4>
 
     <div class="row g-3 mb-4">
         <div class="col-md-4">
@@ -29,7 +135,7 @@
         </div>
     </div>
 
-    {% if bid %}
+    {% if bid and not is_rfq_closed %}
     <div class="mb-4 text-center">
         {% if bid.status == 'submitted' %}
             <span class="badge bg-success px-3 py-2 fs-6"><i class="bi bi-check-all me-1"></i> Η προσφορά έχει υποβληθεί</span>
@@ -146,12 +252,12 @@
             <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary btn-lg">
                 Προσωρινή Αποθήκευση
             </button>
-        {% else %}
-            <div class="alert alert-warning w-100 mb-0 py-2 small">
-                <i class="bi bi-lock-fill me-2"></i>Η επεξεργασία είναι κλειδωμένη λόγω ανάθεσης.
+        {% elif is_rfq_closed %}
+            {% else %}
+            <div class="alert alert-warning w-100 mb-0 py-2 small text-center">
+                <i class="bi bi-lock-fill me-2"></i>Η επεξεργασία είναι προσωρινά κλειδωμένη καθώς γίνεται ανάλυση των προσφορών.
             </div>
         {% endif %}
-        <a class="btn btn-link btn-lg text-decoration-none" href="{{ url_for('supplier_dashboard') }}">Άκυρο</a>
       </div>
     </form>
   </div>
