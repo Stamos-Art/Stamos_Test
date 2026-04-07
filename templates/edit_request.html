@@ -4,7 +4,7 @@
 <div class="card">
   <div class="card-body">
     <h3 class="card-title mb-3">Επεξεργασία Ζήτησης #{{ rfq.id }}</h3>
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
 
       <div class="mb-3">
         <label class="form-label">Τίτλος ζήτησης</label>
@@ -45,6 +45,18 @@
       <div class="mb-3">
         <label class="form-label">Γενικές λεπτομέρειες (προαιρετικά)</label>
         <textarea class="form-control" name="details" rows="4">{{ rfq.description or '' }}</textarea>
+      </div>
+
+      <div class="mb-3 p-3 bg-light border rounded">
+        <label class="form-label text-primary fw-bold"><i class="bi bi-paperclip"></i> Συνημμένο Αρχείο / Προδιαγραφές</label>
+        {% if rfq.documents %}
+        <div class="mb-2 d-block">
+            <span class="text-muted small me-2">Τρέχον αρχείο:</span>
+            <a href="{{ url_for('download_file', filename=rfq.documents) }}" target="_blank" class="fw-bold text-decoration-none"><i class="bi bi-download me-1"></i> Προβολή Αρχείου</a>
+        </div>
+        {% endif %}
+        <input type="file" class="form-control" name="document" accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.png,.jpg,.jpeg">
+        <div class="form-text">Ανεβάστε νέο αρχείο ΜΟΝΟ αν θέλετε να αντικαταστήσετε το υπάρχον.</div>
       </div>
 
       <div class="mb-3">

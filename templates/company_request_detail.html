@@ -14,7 +14,7 @@
     Δημιουργός: {{ rfq.created_by }} | {{ rfq.created_at.strftime('%d/%m/%Y %H:%M') if rfq.created_at else '' }}
 </p>
 
-{% set can_modify = rfq.status != 'closed' and rfq.status != 'received' and (rfq.status != 'pending_final_approval' or session.get('role') == 'chief') %}
+{% set can_modify = rfq.status not in ['closed', 'received', 'cancelled'] and (rfq.status != 'pending_final_approval' or session.get('role') == 'chief') %}
 
 <div class="row mb-4 g-3">
     <div class="col-md-12">
@@ -32,6 +32,15 @@
                 <div class="col-md-4">
                     <p class="mb-2"><strong>Προθεσμία υποβολής:</strong> {{ rfq.submit_deadline.strftime('%d/%m/%Y') if rfq.submit_deadline else '-' }}</p>
                     <p class="mb-0"><strong>Προθεσμία παράδοσης:</strong> {{ rfq.delivery_deadline.strftime('%d/%m/%Y') if rfq.delivery_deadline else '-' }}</p>
+                </div>
+                
+                <div class="col-12 mt-3 pt-3 border-top">
+                    <p class="mb-2"><strong>Συνημμένο Αρχείο Προδιαγραφών:</strong></p>
+                    {% if rfq.documents %}
+                        <a href="{{ url_for('download_file', filename=rfq.documents) }}" target="_blank" class="btn btn-sm btn-outline-primary shadow-sm"><i class="bi bi-file-earmark-arrow-down me-1"></i> Λήψη Αρχείου Εταιρείας</a>
+                    {% else %}
+                        <span class="text-muted small"><em>Δεν έχει επισυναφθεί αρχείο.</em></span>
+                    {% endif %}
                 </div>
             </div>
             
@@ -119,8 +128,7 @@
                     <thead class="table-light">
                         <tr>
                             <th class="text-start ps-4">Περιγραφή Είδους</th>
-                            <th>Προμηθευτής</th>
-                            <th>Παραγγελία</th>
+                            <th>Ποσότητα Παραγγελίας</th>
                             <th style="width: 180px;">Ποσότητα Παραλαβής</th>
                             <th class="text-end pe-4">Κατάσταση</th>
                         </tr>
@@ -134,7 +142,6 @@
                             {% set diff = aw.qty - r_qty %}
                             <tr>
                                 <td class="text-start ps-4 fw-bold">{{ item.description }}</td>
-                                <td><span class="badge bg-light text-dark border"><i class="bi bi-building me-1"></i>{{ aw.supplier_name }}</span></td>
                                 <td>{{ "%.2f"|format(aw.qty) }} {{ item.unit }}</td>
                                 <td>
                                     <div class="input-group input-group-sm">
@@ -160,7 +167,7 @@
             
             {% if rfq.status == 'closed' %}
             <div class="p-3 bg-light border-top d-flex justify-content-between align-items-center">
-                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>Αποθηκεύστε τις ποσότητες σταδιακά (Μερική Παραλαβή) ή οριστικοποιήστε αν ήρθαν όλα.</small>
+                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>Αποθηκεύστε τις ποσότητες σταδιακά ή οριστικοποιήστε την παραλαβή.</small>
                 <div class="d-flex gap-2">
                     <button type="submit" class="btn btn-outline-primary px-4 shadow-sm"><i class="bi bi-save me-1"></i>Αποθήκευση Ποσοτήτων</button>
                     <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#receiptModal">
@@ -211,6 +218,7 @@
     </div>
 </div>
 {% endif %}
+
 
 {% if session.get('role') == 'chief' and rfq.status == 'pending' %}
 <div class="card border-warning shadow-sm my-5">
@@ -285,6 +293,17 @@
                                         -{{ "%.2f"|format(bid.discount_total) }} €
                                     {% else %}
                                         <span class="text-dark">-</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="border-start ps-4">
+                                <div class="text-muted small fw-bold text-uppercase mb-1"><i class="bi bi-paperclip text-info me-1"></i>Τεχνική Προσφορά</div>
+                                <div class="fs-6">
+                                    {% if bid.documents %}
+                                        <a href="{{ url_for('download_file', filename=bid.documents) }}" target="_blank" class="btn btn-sm btn-outline-info shadow-sm"><i class="bi bi-download me-1"></i> Λήψη Αρχείου</a>
+                                    {% else %}
+                                        <span class="text-muted small">-</span>
                                     {% endif %}
                                 </div>
                             </div>
@@ -381,9 +400,9 @@
 
 <div class="d-flex align-items-center gap-2 mt-5 mb-4 p-3 bg-white border rounded shadow-sm">
     {% if is_editable_by_current_user(rfq) or session.get('role') == 'chief' %}
-        {% if rfq.status != 'closed' and rfq.status != 'received' %}
+        {% if rfq.status not in ['closed', 'received', 'cancelled'] %}
         <a href="{{ url_for('edit_request', req_id=rfq.id) }}" class="btn btn-primary px-4 shadow-sm">
-            <i class="bi bi-pencil-square me-1"></i> Επεξεργασία Ζήτησης
+            <i class="bi bi-pencil-square me-1"></i> Επεξεργασία
         </a>
         {% endif %}
     {% endif %}
@@ -391,8 +410,14 @@
     <a href="{{ url_for('new_request', clone_id=rfq.id) }}" class="btn btn-outline-info px-4 shadow-sm text-dark">
         <i class="bi bi-copy me-1"></i> Δημιουργία Αντιγράφου
     </a>
-    
-    <button type="button" class="btn btn-outline-secondary px-4 shadow-sm text-dark" data-bs-toggle="modal" data-bs-target="#auditModal">
+
+    {% if (is_editable_by_current_user(rfq) or session.get('role') == 'chief') and rfq.status not in ['closed', 'received', 'cancelled'] %}
+    <button type="button" class="btn btn-outline-danger px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#cancelModal">
+        <i class="bi bi-trash3 me-1"></i> Ακύρωση Ζήτησης
+    </button>
+    {% endif %}
+
+    <button type="button" class="btn btn-outline-secondary px-4 shadow-sm text-dark ms-2" data-bs-toggle="modal" data-bs-target="#auditModal">
         <i class="bi bi-clock-history me-1"></i> Ιστορικό Ενεργειών
     </button>
 
@@ -411,11 +436,11 @@
                 </button>
             {% else %}
                 <button class="btn btn-secondary px-4 shadow-sm fw-bold" disabled>
-                    <i class="bi bi-hourglass-split me-1"></i> Αναμονή Έγκρισης Διευθυντή
+                    <i class="bi bi-hourglass-split me-1"></i> Αναμονή Έγκρισης
                 </button>
             {% endif %}
 
-        {% elif rfq.status not in ['closed', 'received'] and awarded_summary %}
+        {% elif rfq.status not in ['closed', 'received', 'cancelled'] and awarded_summary %}
             <button type="button" class="btn btn-success px-4 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#finalizeModal">
                 <i class="bi bi-check-circle-fill me-1"></i> Οριστική Ανάθεση
             </button>
@@ -423,7 +448,7 @@
     </div>
 </div>
 
-{% if rfq.status not in ['closed', 'received'] and awarded_summary %}
+{% if rfq.status not in ['closed', 'received', 'cancelled'] and awarded_summary %}
 <div class="modal fade" id="finalizeModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content border-0 shadow">
@@ -432,56 +457,8 @@
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body p-4">
-        
-        {% if rfq.status == 'pending_final_approval' %}
-            <p class="fs-6">Ελέγξατε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>; Με την έγκρισή σας θα κλείσει οριστικά.</p>
-        {% else %}
-            <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }} - {{ rfq.title }}</strong>; 
-            <br><span class="text-muted small">Αν το ποσό υπερβαίνει τα 500€, θα ζητηθεί αυτόματα έγκριση από τον Διευθυντή.</span></p>
-        {% endif %}
-        
-        <div class="bg-light p-3 rounded border mb-4">
-            <h6 class="fw-bold text-muted mb-3 text-uppercase small">Αναλυτικη Συνοψη:</h6>
-            
-            {% for sup, data in awarded_summary.items() %}
-            <div class="mb-3 p-3 border rounded bg-white shadow-sm">
-                <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-2">
-                    <span class="fw-bold text-primary"><i class="bi bi-person-check-fill me-2"></i>{{ sup }}</span>
-                    <strong class="text-dark fs-6">{{ "%.2f"|format(data.final_total) }} €</strong>
-                </div>
-                <ul class="list-unstyled mb-2 small">
-                    {% for item in data['items'] %}
-                    <li class="d-flex justify-content-between text-muted mb-1">
-                        <span class="text-truncate pe-2">
-                            <i class="bi bi-dot"></i> {{ item.desc }} 
-                            <span class="opacity-75">
-                                ({{ "%.2f"|format(item.qty) }} x {{ "%.2f"|format(item.price) }}€)
-                                {% if item.discount_str %}<span class="text-danger fw-bold">[{{ item.discount_str }}]</span>{% endif %}
-                            </span>
-                        </span>
-                        <span class="text-nowrap fw-semibold">{{ "%.2f"|format(item.total) }} €</span>
-                    </li>
-                    {% endfor %}
-                </ul>
-                
-                {% if data.overall_discount > 0 %}
-                <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2 small text-danger">
-                    <span><strong>Συνολική Έκπτωση Προσφοράς</strong> (Αναλογική)</span>
-                    <strong>-{{ "%.2f"|format(data.overall_discount) }} €</strong>
-                </div>
-                {% endif %}
-            </div>
-            {% endfor %}
-            
-            <div class="d-flex justify-content-between mt-4 pt-3 border-top border-2 border-secondary">
-                <span class="fw-bold text-uppercase">Γενικο Συνολο (Καθαρη Αξια):</span>
-                <strong class="text-success fs-5">{{ "%.2f"|format(grand_total_awarded) }} €</strong>
-            </div>
-        </div>
-        
-        <div class="alert alert-warning small mb-0 shadow-sm border-warning">
-            <i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i> <strong>Προσοχή:</strong> Μετά την τελική οριστικοποίηση, οι προμηθευτές θα ενημερωθούν επίσημα για τα είδη που κέρδισαν. Δεν θα μπορείτε πλέον να τροποποιήσετε τις αναθέσεις.
-        </div>
+        <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την ανάθεση για τη ζήτηση <strong>#{{ rfq.id }}</strong>; 
+        <br><span class="text-muted small">Αν το ποσό υπερβαίνει το προσωπικό σας όριο, θα ζητηθεί έγκριση από τον Διευθυντή.</span></p>
       </div>
       <div class="modal-footer bg-light">
         <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Άκυρο</button>
@@ -504,9 +481,6 @@
       </div>
       <div class="modal-body p-4">
         <p class="fs-6">Είστε σίγουροι ότι θέλετε να οριστικοποιήσετε την παραλαβή για τη ζήτηση <strong>#{{ rfq.id }}</strong>;</p>
-        <div class="alert alert-info small mb-0 shadow-sm">
-            <i class="bi bi-info-circle-fill me-1"></i> Μετά την ολοκλήρωση, η ζήτηση θα σημειωθεί οριστικά ως "Παραλήφθηκε" και δεν θα μπορείτε να αλλάξετε τις ποσότητες παραλαβής.
-        </div>
       </div>
       <div class="modal-footer bg-light">
         <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Άκυρο</button>
@@ -518,6 +492,29 @@
   </div>
 </div>
 {% endif %}
+
+<div class="modal fade" id="cancelModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title fw-bold"><i class="bi bi-exclamation-triangle me-2"></i>Ακύρωση Ζήτησης</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="fs-6">Είστε σίγουροι ότι θέλετε να ακυρώσετε/διαγράψετε τη ζήτηση <strong>#{{ rfq.id }}</strong>;</p>
+        <div class="alert alert-danger small mb-0 shadow-sm border-danger">
+            <i class="bi bi-info-circle-fill me-1"></i> Η ζήτηση θα παραμείνει στο σύστημα για ιστορικούς λόγους, αλλά θα απενεργοποιηθεί οριστικά.
+        </div>
+      </div>
+      <div class="modal-footer bg-light">
+        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Επιστροφή</button>
+        <form method="post" action="{{ url_for('cancel_request', req_id=rfq.id) }}">
+            <button type="submit" class="btn btn-danger px-4 fw-bold"><i class="bi bi-trash3 me-1"></i>Επιβεβαίωση Ακύρωσης</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="modal fade" id="auditModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-scrollable">
@@ -537,9 +534,7 @@
                 <p class="mb-0 text-dark small">{{ log.action }}</p>
             </li>
             {% else %}
-            <li class="list-group-item p-4 text-center text-muted">
-                Δεν βρέθηκαν καταγραφές ιστορικού για αυτή τη ζήτηση.
-            </li>
+            <li class="list-group-item p-4 text-center text-muted">Δεν βρέθηκαν καταγραφές ιστορικού.</li>
             {% endfor %}
         </ul>
       </div>
@@ -549,5 +544,4 @@
     </div>
   </div>
 </div>
-
 {% endblock %}

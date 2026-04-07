@@ -9,10 +9,10 @@
   <div class="card-body p-4">
     <h4 class="mb-4">Λεπτομέρειες Χρήστη: <span class="text-primary">{{ u.username }}</span></h4>
 
-    <form method="post" class="row g-3">
+    <form method="post" class="row g-3" id="userDetailForm">
       <div class="col-md-4">
         <label class="form-label text-muted">Username (Μη επεξεργάσιμο)</label>
-        <input class="form-control" value="{{ u.username }}" disabled>
+        <input class="form-control bg-light" value="{{ u.username }}" disabled>
       </div>
       <div class="col-md-4">
         <label class="form-label">Εμφανιζόμενο όνομα <span class="text-danger">*</span></label>
@@ -25,6 +25,15 @@
           <option value="company" {{ 'selected' if u.role=='company' else '' }}>Employee (Company)</option>
           <option value="supplier" {{ 'selected' if u.role=='supplier' else '' }}>Supplier</option>
         </select>
+      </div>
+
+      <div class="col-md-4 mt-4">
+        <label class="form-label fw-bold text-success">
+            <i class="bi bi-cash-coin me-1"></i> Όριο Έγκρισης (€) 
+            <i class="bi bi-info-circle text-muted fw-normal ms-1" title="Ισχύει για ρόλο Employee" data-bs-toggle="tooltip"></i>
+        </label>
+        <input type="number" step="0.01" min="0" class="form-control border-success" name="approval_limit" value="{{ u.approval_limit if u.approval_limit is not none else '500.00' }}">
+        <small class="text-muted">Αφήστε κενό ή 0 αν θέλετε να απαιτείται πάντα έγκριση.</small>
       </div>
 
       <div class="col-md-4 mt-4">
@@ -95,4 +104,21 @@
     </form>
   </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('userDetailForm');
+    
+    form.addEventListener('keydown', function(event) {
+        // Ελέγχουμε αν πατήθηκε το Enter
+        if (event.key === 'Enter') {
+            // Αν ΔΕΝ είμαστε μέσα σε Textarea (π.χ. Σημειώσεις), σταματάμε την υποβολή
+            if (event.target.tagName !== 'TEXTAREA') {
+                event.preventDefault();
+                return false;
+            }
+        }
+    });
+});
+</script>
 {% endblock %}
