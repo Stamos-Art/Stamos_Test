@@ -3,14 +3,15 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, request, session, url_for, flash
+from flask import Flask, redirect, render_template, request, session, url_for, flash, send_from_directory
+from werkzeug.utils import secure_filename
 from sqlalchemy import inspect, or_
 from functools import wraps
 
 from models import (
     db, User, SupplierProfile, CostCenter, RequestRFQ, 
     RequestItem, Bid, BidLine, ItemAward, ItemReceipt, AllowedSupplier,
-    ActionLog, Notification  # <--- Προστέθηκαν τα νέα models
+    ActionLog, Notification, RFQStatus
 )
 
 BASE_DIR = Path(__file__).parent
@@ -20,6 +21,12 @@ app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SECRET_KEY"] = "dev-secret-key-change-this-in-prod"
+
+# --- ΝΕΟ: Ρυθμίσεις Φακέλου Ανεβασμένων Αρχείων ---
+UPLOAD_FOLDER = BASE_DIR / "uploads"
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ---------------------------------------------------
 
 db.init_app(app)
 
@@ -41,9 +48,8 @@ def require_role(role):
 def is_editable_by_current_user(rfq: "RequestRFQ") -> bool:
     if session.get("name") != rfq.created_by:
         return False
-    return rfq.status == "pending"
+    return rfq.status == RFQStatus.PENDING
 
-# --- ΣΥΣΤΗΜΑ ΙΣΤΟΡΙΚΟΥ ΚΑΙ ΕΙΔΟΠΟΙΗΣΕΩΝ ---
 def log_action(req_id, action_desc):
     if 'name' in session:
         db.session.add(ActionLog(request_id=req_id, user_name=session['name'], action=action_desc))
@@ -57,15 +63,15 @@ def notify_role(role, message, link):
     users = User.query.filter_by(role=role, is_active=True).all()
     for u in users:
         db.session.add(Notification(user_id=u.id, message=message, link=link))
-# ------------------------------------------
 
 def get_phase_key(rfq: "RequestRFQ") -> str:
-    if rfq.status == "denied": return "denied"
-    if rfq.status == "pending": return "awaiting_approval"
-    if rfq.status == "pending_final_approval": return "pending_final_approval"
-    if rfq.status == "received": return "received" 
-    if rfq.status == "closed": return "awarded"
-    if rfq.status == "open":
+    if rfq.status == RFQStatus.CANCELLED: return "cancelled"
+    if rfq.status == RFQStatus.DENIED: return "denied"
+    if rfq.status == RFQStatus.PENDING: return "awaiting_approval"
+    if rfq.status == RFQStatus.PENDING_FINAL_APPROVAL: return "pending_final_approval"
+    if rfq.status == RFQStatus.RECEIVED: return "received"
+    if rfq.status == RFQStatus.CLOSED: return "awarded"
+    if rfq.status == RFQStatus.OPEN:
         count_bids = len(rfq.bids or [])
         return "offers_received" if count_bids > 0 else "awaiting_offers"
     return rfq.status
@@ -81,6 +87,7 @@ def phase_info(rfq: "RequestRFQ"):
         "received": {"label": "Παραλήφθηκε", "badge": "badge bg-success", "icon": "bi-box-seam"},
         "denied": {"label": "Απορρίφθηκε", "badge": "badge bg-danger", "icon": "bi-x-circle"},
         "closed": {"label": "Κλειστό", "badge": "badge bg-secondary", "icon": "bi-door-closed"},
+        "cancelled": {"label": "Ακυρώθηκε", "badge": "badge bg-dark", "icon": "bi-slash-circle"},
     }
     info = mapping.get(key, {"label": key.title(), "badge": "badge bg-secondary", "icon": "bi-circle"})
     info["key"] = key
@@ -93,16 +100,13 @@ def utility_processor():
         u = User.query.filter_by(username=session['username']).first()
         if u:
             unread_notifs = Notification.query.filter_by(user_id=u.id, is_read=False).order_by(Notification.created_at.desc()).all()
-            
     return dict(phase_info=phase_info, is_editable_by_current_user=is_editable_by_current_user, now=datetime.utcnow(), unread_notifs=unread_notifs)
 
 # ---------------- Routes ----------------
 @app.route("/")
 def index():
-    if session.get("role") in ["company", "chief"]:
-        return redirect(url_for("company_dashboard"))
-    if session.get("role") == "supplier":
-        return redirect(url_for("supplier_dashboard"))
+    if session.get("role") in ["company", "chief"]: return redirect(url_for("company_dashboard"))
+    if session.get("role") == "supplier": return redirect(url_for("supplier_dashboard"))
     return redirect(url_for("login"))
 
 @app.route("/login", methods=["GET", "POST"])
@@ -129,7 +133,11 @@ def logout():
     flash("Αποσύνδεση ολοκληρώθηκε.", "info")
     return redirect(url_for("login"))
 
-# ---- ROUTES ΓΙΑ ΕΙΔΟΠΟΙΗΣΕΙΣ ----
+# ΝΕΟ: Διαδρομή για κατέβασμα αρχείων
+@app.route('/uploads/<path:filename>')
+def download_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route("/notifications/read/<int:notif_id>")
 def read_notification(notif_id):
     n = Notification.query.get_or_404(notif_id)
@@ -147,26 +155,131 @@ def read_all_notifications():
             Notification.query.filter_by(user_id=u.id, is_read=False).update({'is_read': True})
             db.session.commit()
     return redirect(request.referrer or url_for('index'))
-# ---------------------------------
 
 @app.route("/company")
 @require_roles("company", "chief")
 def company_dashboard():
+    page = request.args.get('page', 1, type=int)
+    per_page = 10 
     phase = (request.args.get("phase") or "all").strip().lower()
     q = (request.args.get("q") or "").strip()
+    
     qry = RequestRFQ.query
     if q:
         like = f"%{q}%"
         qry = qry.filter(or_(RequestRFQ.title.ilike(like), RequestRFQ.description.ilike(like)))
-    rfqs = qry.order_by(RequestRFQ.id.desc()).all()
-
-    editable_ids = {r.id for r in rfqs if is_editable_by_current_user(r)}
-    phase_map = {r.id: phase_info(r) for r in rfqs}
-
+    
+    all_rfqs = qry.order_by(RequestRFQ.id.desc()).all()
+    
+    # Λογική φιλτραρίσματος και pagination
+    phase_map = {r.id: phase_info(r) for r in all_rfqs}
+    editable_ids = {r.id for r in all_rfqs if is_editable_by_current_user(r)}
+    
+    filtered_rfqs = all_rfqs
     if phase != "all":
-        rfqs = [r for r in rfqs if phase_map[r.id]["key"] == phase]
+        filtered_rfqs = [r for r in all_rfqs if phase_map[r.id]["key"] == phase]
+        
+    total_items = len(filtered_rfqs)
+    total_pages = (total_items + per_page - 1) // per_page
+    start_idx = (page - 1) * per_page
+    paginated_rfqs = filtered_rfqs[start_idx : start_idx + per_page]
 
-    return render_template("company_dash.html", rfqs=rfqs, editable_ids=editable_ids, phase=phase, q=q, phase_map=phase_map)
+    return render_template("company_dash.html", 
+                           rfqs=paginated_rfqs, editable_ids=editable_ids, 
+                           phase=phase, q=q, phase_map=phase_map,
+                           page=page, total_pages=total_pages)
+
+
+from datetime import datetime
+
+@app.route("/chief/analytics")
+@require_role("chief")
+def chief_analytics():
+    # 1. ΚΕΝΤΡΙΚΟ ΦΙΛΤΡΟ ΗΜΕΡΟΜΗΝΙΩΝ
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    # Βασικά Queries
+    rfq_query = RequestRFQ.query
+    award_query = ItemAward.query.join(RequestRFQ)
+
+    # Εφαρμογή φίλτρου ημερομηνιών
+    if start_date_str:
+        try:
+            dt_start = datetime.strptime(start_date_str, '%Y-%m-%d')
+            rfq_query = rfq_query.filter(RequestRFQ.created_at >= dt_start)
+            award_query = award_query.filter(ItemAward.created_at >= dt_start)
+        except: pass
+    if end_date_str:
+        try:
+            dt_end = datetime.strptime(end_date_str, '%Y-%m-%d')
+            rfq_query = rfq_query.filter(RequestRFQ.created_at <= dt_end)
+            award_query = award_query.filter(ItemAward.created_at <= dt_end)
+        except: pass
+
+    # 2. ΥΠΟΛΟΓΙΣΜΟΣ KPIs (Βασικοί Δείκτες)
+    all_rfqs = rfq_query.all()
+    all_awards = award_query.all()
+
+    total_spend = sum((aw.line_total or 0) for aw in all_awards)
+    pending_approvals = sum(1 for r in all_rfqs if r.status in [RFQStatus.PENDING, RFQStatus.PENDING_FINAL_APPROVAL])
+    active_requests = sum(1 for r in all_rfqs if r.status not in [RFQStatus.RECEIVED, RFQStatus.CANCELLED])
+    
+    
+    # Μέσος Χρόνος Παράδοσης (Lead Time)
+    delivery_days = []
+    for r in all_rfqs:
+        if r.status == RFQStatus.RECEIVED and r.approved_at:
+            last_rec = ItemReceipt.query.filter_by(request_id=r.id).order_by(ItemReceipt.received_at.desc()).first()
+            if last_rec:
+                delivery_days.append(max(0, (last_rec.received_at - r.approved_at).days))
+    
+    avg_delivery = round(sum(delivery_days) / len(delivery_days), 1) if delivery_days else 0
+
+    # 3. ΔΕΔΟΜΕΝΑ ΓΡΑΦΗΜΑΤΩΝ
+    trend_data = {}
+    cc_data = {}
+    supplier_data = {}
+
+    for aw in all_awards:
+        amount = float(aw.line_total or 0)
+        
+        # Τάση (Ανά Μήνα)
+        month = aw.created_at.strftime('%Y-%m')
+        trend_data[month] = trend_data.get(month, 0) + amount
+        
+        # Έξοδα Ανά Έργο (Cost Center)
+        cc_name = aw.bid.rfq.cost_center.name if aw.bid.rfq.cost_center else "Χωρίς Έργο"
+        cc_data[cc_name] = cc_data.get(cc_name, 0) + amount
+        
+        # Top Προμηθευτές
+        supplier_data[aw.supplier_name] = supplier_data.get(aw.supplier_name, 0) + amount
+
+    # Ταξινόμηση
+    sorted_months = sorted(trend_data.keys())
+    top_suppliers = dict(sorted(supplier_data.items(), key=lambda x: x[1], reverse=True)[:5]) # Μόνο οι Top 5
+
+    # 4. ΠΑΚΕΤΑΡΙΣΜΑ ΣΕ JSON
+    analytics_data = {
+        "filters": {"start": start_date_str, "end": end_date_str},
+        "kpis": {
+            "spend": total_spend,
+            "pending": pending_approvals,
+            "active": active_requests,
+            "lead_time": avg_delivery
+        },
+        "charts": {
+            "trend": {"labels": sorted_months, "values": [trend_data[m] for m in sorted_months]},
+            "cc": {"labels": list(cc_data.keys()), "values": list(cc_data.values())},
+            "sups": {"labels": list(top_suppliers.keys()), "values": list(top_suppliers.values())}
+        }
+    }
+
+    return render_template("chief_analytics.html", data=analytics_data)
+
+
+
+
 
 @app.route("/company/requests/new", methods=["GET", "POST"])
 @require_roles("company", "chief")
@@ -181,7 +294,6 @@ def new_request():
         phone = (request.form.get("phone") or "").strip()
         details = (request.form.get("details") or "").strip()
         cc_id = request.form.get("cost_center") 
-        
         try:
             s_deadline = datetime.strptime(request.form.get("submit_deadline"), "%Y-%m-%d")
             d_deadline = datetime.strptime(request.form.get("delivery_deadline"), "%Y-%m-%d")
@@ -193,10 +305,19 @@ def new_request():
             flash("Επίλεξε Έργο/Κέντρο Κόστους.", "danger")
             return redirect(url_for("new_request"))
 
+        # --- ΝΕΟ: Αποθήκευση Ανεβασμένου Αρχείου Εταιρείας ---
+        doc_filename = None
+        file = request.files.get("document")
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            doc_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], doc_filename))
+        # -----------------------------------------------------
+
         rfq = RequestRFQ(
-            title=title, description=details, created_by=session.get("name", "Employee"),
+            title=title, description=details, documents=doc_filename, created_by=session.get("name", "Employee"),
             delivery_location=location, receiving_manager=r_manager, phone=phone,                  
-            submit_deadline=s_deadline, delivery_deadline=d_deadline, cost_center_id=int(cc_id), status="pending"
+            submit_deadline=s_deadline, delivery_deadline=d_deadline, cost_center_id=int(cc_id), status=RFQStatus.PENDING
         )
         db.session.add(rfq)
         db.session.flush()
@@ -216,38 +337,29 @@ def new_request():
         for uname in selected_suppliers:
             db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
 
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ ΚΑΙ ΕΙΔΟΠΟΙΗΣΗΣ
         log_action(rfq.id, "Δημιουργία νέας ζήτησης (Προσχέδιο).")
         notify_role('chief', f"Νέα ζήτηση #{rfq.id} αναμένει έγκριση.", url_for('company_request_detail', req_id=rfq.id))
-
         db.session.commit()
         flash("Η ζήτηση δημιουργήθηκε επιτυχώς.", "success")
         return redirect(url_for("company_dashboard"))
 
     clone_id = request.args.get("clone_id")
-    clone_rfq = None
-    if clone_id:
-        clone_rfq = RequestRFQ.query.get(int(clone_id))
-
+    clone_rfq = RequestRFQ.query.get(int(clone_id)) if clone_id else None
     suppliers_list = [(u.username, u.display_name) for u in suppliers]
     return render_template("new_request.html", suppliers=suppliers_list, cost_centers=cost_centers, clone_rfq=clone_rfq)
-
 
 @app.route("/company/requests/<int:req_id>")
 @require_roles("company", "chief")
 def company_request_detail(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
     bids = Bid.query.filter_by(request_id=req_id).all()
-    
     awards_list = ItemAward.query.filter_by(request_id=req_id).all()
     awards = {aw.request_item_id: aw for aw in awards_list if aw.request_item_id is not None}
-    
     shipping_awards = [aw for aw in awards_list if aw.request_item_id is None]
     shipping_winning_bid_ids = {aw.bid_id for aw in shipping_awards}
 
     awarded_summary = {}
     grand_total_awarded = Decimal(0)
-    
     for aw in awards_list:
         sup = aw.supplier_name
         val = aw.line_total or Decimal(0)
@@ -258,29 +370,17 @@ def company_request_detail(req_id):
             effective_disc_pct = Decimal(0)
             if bid and bid.subtotal and bid.subtotal > 0 and bid.discount_total and bid.discount_total > 0:
                 effective_disc_pct = bid.discount_total / bid.subtotal
-                
             awarded_summary[sup] = {
-                'subtotal': Decimal(0), 
-                'items': [],
-                'effective_disc_pct': effective_disc_pct,
-                'overall_discount': Decimal(0),
-                'final_total': Decimal(0)
+                'subtotal': Decimal(0), 'items': [], 'effective_disc_pct': effective_disc_pct,
+                'overall_discount': Decimal(0), 'final_total': Decimal(0)
             }
             
         awarded_summary[sup]['subtotal'] += val
-        
-        if aw.request_item_id is None:
-            desc = "Μεταφορικά / Έξοδα Αποστολής"
-        else:
-            req_item = next((it for it in rfq.items if it.id == aw.request_item_id), None)
-            desc = req_item.description if req_item else "Άγνωστο είδος"
-            
+        desc = next((it.description for it in rfq.items if it.id == aw.request_item_id), "Άγνωστο είδος") if aw.request_item_id else "Μεταφορικά / Έξοδα Αποστολής"
         item_disc_str = ""
         if bl:
-            if bl.discount_type == 'pct' and bl.discount_pct and bl.discount_pct > 0:
-                item_disc_str = f"-{bl.discount_pct}%"
-            elif bl.discount_type == 'amt' and bl.discount_amount and bl.discount_amount > 0:
-                item_disc_str = f"-{bl.discount_amount}€"
+            if bl.discount_type == 'pct' and bl.discount_pct and bl.discount_pct > 0: item_disc_str = f"-{bl.discount_pct}%"
+            elif bl.discount_type == 'amt' and bl.discount_amount and bl.discount_amount > 0: item_disc_str = f"-{bl.discount_amount}€"
                 
         awarded_summary[sup]['items'].append({
             'desc': desc, 'qty': aw.qty or Decimal(1), 'price': aw.unit_price or Decimal(0),
@@ -300,12 +400,11 @@ def company_request_detail(req_id):
                            shipping_awards=shipping_awards, shipping_winning_bid_ids=shipping_winning_bid_ids,
                            awarded_summary=awarded_summary, grand_total_awarded=grand_total_awarded, receipts=receipts)
 
-
 @app.route("/company/requests/<int:req_id>/save_receipt", methods=["POST"])
 @require_roles("company", "chief")
 def save_receipt(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    if rfq.status not in ['closed', 'received']:
+    if rfq.status not in [RFQStatus.CLOSED, RFQStatus.RECEIVED]:
         flash("Μη έγκυρη ενέργεια.", "danger")
         return redirect(url_for('company_request_detail', req_id=req_id))
         
@@ -320,14 +419,11 @@ def save_receipt(req_id):
                     supplier = award.supplier_name if award else "Άγνωστος"
                     receipt = ItemReceipt(request_id=rfq.id, request_item_id=item.id, awarded_supplier=supplier)
                     db.session.add(receipt)
-                
                 receipt.received_qty = qty
                 receipt.received_by = session.get("name")
                 receipt.received_at = datetime.utcnow()
-            except Exception:
-                pass
+            except Exception: pass
     
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
     log_action(rfq.id, "Ενημέρωση ποσοτήτων παραλαβής ειδών.")
     db.session.commit()
     flash("Οι ποσότητες παραλαβής αποθηκεύτηκαν επιτυχώς.", "success")
@@ -337,8 +433,7 @@ def save_receipt(req_id):
 @require_roles("company", "chief")
 def finalize_receipt(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    rfq.status = 'received'
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
+    rfq.status = RFQStatus.RECEIVED
     log_action(rfq.id, "Οριστική ολοκλήρωση παραλαβής.")
     db.session.commit()
     flash("Η παραλαβή ολοκληρώθηκε οριστικά!", "success")
@@ -348,14 +443,13 @@ def finalize_receipt(req_id):
 @require_roles("company", "chief")
 def award_item(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    if rfq.status == 'closed' or (rfq.status == 'pending_final_approval' and session.get('role') != 'chief'):
+    if rfq.status == RFQStatus.CLOSED or (rfq.status == RFQStatus.PENDING_FINAL_APPROVAL and session.get('role') != 'chief'):
         flash("Δεν μπορείτε να τροποποιήσετε τις αναθέσεις σε αυτή την κατάσταση.", "danger")
         return redirect(url_for('company_request_detail', req_id=req_id))
 
     item_id_raw = request.form.get("request_item_id")
     bid_line_id = request.form.get("bid_line_id")
     bid_line = BidLine.query.get(bid_line_id)
-
     supplier_name = bid_line.bid.supplier_name
 
     if item_id_raw == 'shipping':
@@ -374,10 +468,7 @@ def award_item(req_id):
     award.unit_price = bid_line.unit_price
     
     db.session.add(award)
-    
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
     log_action(rfq.id, f"Ανάθεση '{bid_line.description}' στον προμηθευτή '{supplier_name}'.")
-    
     db.session.commit()
     flash(f"Η ανάθεση για '{bid_line.description}' ενημερώθηκε.", "success")
     return redirect(url_for('company_request_detail', req_id=req_id, open_bid=bid_line.bid_id))
@@ -386,21 +477,15 @@ def award_item(req_id):
 @require_roles("company", "chief")
 def unaward_item(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    if rfq.status == 'closed' or (rfq.status == 'pending_final_approval' and session.get('role') != 'chief'):
+    if rfq.status == RFQStatus.CLOSED or (rfq.status == RFQStatus.PENDING_FINAL_APPROVAL and session.get('role') != 'chief'):
         flash("Δεν μπορείτε να τροποποιήσετε τις αναθέσεις σε αυτή την κατάσταση.", "danger")
         return redirect(url_for('company_request_detail', req_id=req_id))
 
     item_id_raw = request.form.get("request_item_id")
     bid_id = request.form.get("bid_id") 
-
-    if item_id_raw == 'shipping':
-        award = ItemAward.query.filter_by(request_id=req_id, request_item_id=None, bid_id=bid_id).first()
-    else:
-        award = ItemAward.query.filter_by(request_id=req_id, request_item_id=int(item_id_raw)).first()
-    
+    award = ItemAward.query.filter_by(request_id=req_id, request_item_id=None if item_id_raw == 'shipping' else int(item_id_raw)).first()
     if award:
         db.session.delete(award)
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
         log_action(rfq.id, "Ακύρωση ανάθεσης είδους.")
         db.session.commit()
         flash("Η ανάθεση ακυρώθηκε.", "info")
@@ -422,13 +507,11 @@ def finalize_award(req_id):
         sup = aw.supplier_name
         val = aw.line_total or Decimal(0)
         bid = aw.bid
-        
         if sup not in awarded_summary:
             effective_disc_pct = Decimal(0)
             if bid and bid.subtotal and bid.subtotal > 0 and bid.discount_total and bid.discount_total > 0:
                 effective_disc_pct = bid.discount_total / bid.subtotal
             awarded_summary[sup] = {'subtotal': Decimal(0), 'effective_disc_pct': effective_disc_pct}
-            
         awarded_summary[sup]['subtotal'] += val
 
     for sup, data in awarded_summary.items():
@@ -436,24 +519,22 @@ def finalize_award(req_id):
         final_total = data['subtotal'] - overall_discount
         grand_total_awarded += final_total
 
-    if grand_total_awarded > 500 and session.get('role') == 'company':
-        rfq.status = 'pending_final_approval'
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ & ΕΙΔΟΠΟΙΗΣΗΣ
-        log_action(rfq.id, f"Αναμονή τελικής έγκρισης από Διευθυντή (Σύνολο: {grand_total_awarded:.2f}€).")
-        notify_role('chief', f"Η ζήτηση #{rfq.id} υπερβαίνει τα 500€ και απαιτεί τελική έγκριση.", url_for('company_request_detail', req_id=rfq.id))
-        
+    current_user = User.query.filter_by(username=session['username']).first()
+    user_limit = current_user.approval_limit if current_user and current_user.approval_limit is not None else Decimal('500.00')
+
+    if grand_total_awarded > user_limit and session.get('role') == 'company':
+        rfq.status = RFQStatus.PENDING_FINAL_APPROVAL
+        log_action(rfq.id, f"Αναμονή τελικής έγκρισης από Διευθυντή (Σύνολο: {grand_total_awarded:.2f}€, Όριο: {user_limit:.2f}€).")
+        notify_role('chief', f"Η ζήτηση #{rfq.id} υπερβαίνει το όριο ({user_limit:.2f}€) και απαιτεί τελική έγκριση.", url_for('company_request_detail', req_id=rfq.id))
         db.session.commit()
-        flash(f"Το συνολικό κόστος ({grand_total_awarded:.2f}€) υπερβαίνει τα 500€. Εστάλη στον Διευθυντή για τελική έγκριση.", "info")
+        flash(f"Το συνολικό κόστος ({grand_total_awarded:.2f}€) υπερβαίνει το όριό σας ({user_limit:.2f}€). Εστάλη στον Διευθυντή.", "info")
     else:
-        rfq.status = 'closed'
-        
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ & ΕΙΔΟΠΟΙΗΣΗΣ ΣΤΟΥΣ ΠΡΟΜΗΘΕΥΤΕΣ
+        rfq.status = RFQStatus.CLOSED
         log_action(rfq.id, "Οριστική κατακύρωση παραγγελίας στους προμηθευτές.")
         winners = {aw.supplier_name for aw in awards_list}
         for w in winners:
             u = User.query.filter_by(display_name=w).first()
             if u: notify_user(u.username, f"Συγχαρητήρια! Σας ανατέθηκε η παραγγελία #{rfq.id}.", url_for('supplier_bid', req_id=rfq.id))
-            
         db.session.commit()
         flash(f"Η ανάθεση οριστικοποιήθηκε. Η ζήτηση έκλεισε επιτυχώς!", "success")
         
@@ -463,17 +544,33 @@ def finalize_award(req_id):
 @require_roles("chief")
 def revert_approval(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    rfq.status = 'open'
-    
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ & ΕΙΔΟΠΟΙΗΣΗΣ
+    rfq.status = RFQStatus.OPEN
     log_action(rfq.id, "Ο Διευθυντής επέστρεψε τη ζήτηση στον υπάλληλο.")
     u = User.query.filter_by(display_name=rfq.created_by).first()
     if u: notify_user(u.username, f"Η ζήτηση #{rfq.id} σας επιστράφηκε για επανεξέταση.", url_for('company_request_detail', req_id=rfq.id))
-        
     db.session.commit()
     flash("Η ζήτηση επιστράφηκε στον υπάλληλο για επανεξέταση.", "warning")
     return redirect(url_for('company_request_detail', req_id=req_id))
 
+@app.route("/company/requests/<int:req_id>/cancel", methods=["POST"])
+@require_roles("company", "chief")
+def cancel_request(req_id):
+    rfq = RequestRFQ.query.get_or_404(req_id)
+    
+    if not is_editable_by_current_user(rfq) and session.get('role') != 'chief':
+        flash("Δεν έχετε δικαίωμα ακύρωσης αυτής της ζήτησης.", "danger")
+        return redirect(url_for('company_request_detail', req_id=req_id))
+        
+    if rfq.status in [RFQStatus.CLOSED, RFQStatus.RECEIVED]:
+        flash("Δεν μπορεί να ακυρωθεί μια ζήτηση που έχει ήδη ανατεθεί ή παραληφθεί.", "warning")
+        return redirect(url_for('company_request_detail', req_id=req_id))
+        
+    rfq.status = RFQStatus.CANCELLED
+    log_action(rfq.id, "Η ζήτηση Ακυρώθηκε (Soft Delete).")
+    db.session.commit()
+    
+    flash("Η ζήτηση ακυρώθηκε επιτυχώς.", "success")
+    return redirect(url_for('company_dashboard'))
 
 @app.route("/company/requests/<int:req_id>/edit", methods=["GET", "POST"])
 @require_roles("company", "chief")
@@ -490,10 +587,8 @@ def edit_request(req_id):
         rfq.title = request.form.get("title")
         rfq.delivery_location = request.form.get("delivery_location")
         rfq.description = request.form.get("details")
-        
         cc_id = request.form.get("cost_center")
-        if cc_id:
-            rfq.cost_center_id = int(cc_id)
+        if cc_id: rfq.cost_center_id = int(cc_id)
         
         try:
             s_deadline = datetime.strptime(request.form.get("submit_deadline"), "%Y-%m-%d")
@@ -501,17 +596,23 @@ def edit_request(req_id):
             if d_deadline < s_deadline:
                 flash("Η ημερομηνία παράδοσης δεν μπορεί να είναι νωρίτερα από την ημερομηνία υποβολής.", "danger")
                 return redirect(url_for('edit_request', req_id=req_id))
-                
             rfq.submit_deadline = s_deadline
             rfq.delivery_deadline = d_deadline
-        except (ValueError, TypeError):
-            pass 
+        except: pass 
+
+        # --- ΝΕΟ: Ενημέρωση Αρχείου αν ανέβηκε νέο ---
+        file = request.files.get("document")
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            doc_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], doc_filename))
+            rfq.documents = doc_filename
+        # ---------------------------------------------
 
         selected_suppliers = request.form.getlist("suppliers[]")
         if selected_suppliers:
             AllowedSupplier.query.filter_by(request_id=rfq.id).delete()
-            for uname in selected_suppliers:
-                db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
+            for uname in selected_suppliers: db.session.add(AllowedSupplier(request_id=rfq.id, supplier_username=uname))
 
         RequestItem.query.filter_by(request_id=rfq.id).delete()
         item_descs = request.form.getlist("item_desc[]")
@@ -519,20 +620,16 @@ def edit_request(req_id):
         item_qtys = request.form.getlist("item_qty[]")
         for i in range(len(item_descs)):
             desc = item_descs[i].strip()
-            if not desc:
-                continue
+            if not desc: continue
             unit = item_units[i] if i < len(item_units) else "τμχ"
-            try:
-                qty = float(item_qtys[i])
-            except ValueError:
-                qty = 1.0
+            try: qty = float(item_qtys[i])
+            except ValueError: qty = 1.0
             db.session.add(RequestItem(request_id=rfq.id, description=desc, unit=unit, quantity=qty))
 
-        if rfq.status == 'denied':
-            rfq.status = 'pending'
+        if rfq.status == RFQStatus.DENIED:
+            rfq.status = RFQStatus.PENDING
             rfq.denial_reason = None
             
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
         log_action(rfq.id, "Επεξεργασία στοιχείων ζήτησης.")
         db.session.commit()
         flash("Η ζήτηση ενημερώθηκε.", "success")
@@ -540,23 +637,19 @@ def edit_request(req_id):
     
     current_suppliers = [s.supplier_username for s in rfq.allowed_suppliers]
     suppliers_list = [(u.username, u.display_name) for u in suppliers_all]
-
     return render_template("edit_request.html", rfq=rfq, suppliers=suppliers_list, current_suppliers=current_suppliers, cost_centers=cost_centers)
 
 @app.route("/chief/requests/<int:req_id>/approve", methods=["POST"])
 @require_role("chief")
 def chief_approve(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    rfq.status = "open"
+    rfq.status = RFQStatus.OPEN
     rfq.approved_by = session.get("name")
     rfq.approved_at = datetime.utcnow()
     rfq.denial_reason = None
-    
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ & ΕΙΔΟΠΟΙΗΣΗΣ
     log_action(rfq.id, "Έγκριση και Δημοσίευση στους προμηθευτές.")
     u = User.query.filter_by(display_name=rfq.created_by).first()
     if u: notify_user(u.username, f"Η ζήτηση #{rfq.id} εγκρίθηκε και δημοσιεύτηκε.", url_for('company_request_detail', req_id=rfq.id))
-        
     db.session.commit()
     flash("Η ζήτηση εγκρίθηκε.", "success")
     return redirect(url_for('company_request_detail', req_id=req_id))
@@ -565,15 +658,12 @@ def chief_approve(req_id):
 @require_role("chief")
 def chief_deny(req_id):
     rfq = RequestRFQ.query.get_or_404(req_id)
-    rfq.status = "denied"
+    rfq.status = RFQStatus.DENIED
     reason = request.form.get("reason", "No reason provided.")
     rfq.denial_reason = reason
-    
-    # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ & ΕΙΔΟΠΟΙΗΣΗΣ
     log_action(rfq.id, f"Απόρριψη ζήτησης. Λόγος: {reason}")
     u = User.query.filter_by(display_name=rfq.created_by).first()
     if u: notify_user(u.username, f"Η ζήτηση #{rfq.id} απορρίφθηκε.", url_for('company_request_detail', req_id=rfq.id))
-        
     db.session.commit()
     flash("Η ζήτηση απορρίφθηκε.", "warning")
     return redirect(url_for('company_request_detail', req_id=req_id))
@@ -618,13 +708,16 @@ def chief_user_detail(user_id):
         u.role = request.form.get("role")
         u.is_active = 'is_active' in request.form
         
+        app_limit = request.form.get("approval_limit")
+        if app_limit is not None and app_limit.strip():
+            try: u.approval_limit = Decimal(app_limit)
+            except: pass
+        
         new_pass = request.form.get("password")
-        if new_pass:
-            u.set_password(new_pass)
+        if new_pass: u.set_password(new_pass)
 
         if u.role == 'supplier':
-            if not u.profile:
-                u.profile = SupplierProfile(user_id=u.id)
+            if not u.profile: u.profile = SupplierProfile(user_id=u.id)
             u.profile.company_name = request.form.get("company_name")
             u.profile.tax_id = request.form.get("tax_id")
             u.profile.contact_name = request.form.get("contact_name")
@@ -648,30 +741,18 @@ def manage_cost_centers():
     if request.method == "POST":
         code = request.form.get("code").strip()
         name = request.form.get("name").strip()
-        
         address = (request.form.get("address") or "").strip()
         project_manager = (request.form.get("project_manager") or "").strip()
         receiving_manager = (request.form.get("receiving_manager") or "").strip()
         phone = (request.form.get("phone") or "").strip()
-
         if code and name:
-            if CostCenter.query.filter_by(code=code).first():
-                flash("Ο κωδικός έργου υπάρχει ήδη.", "danger")
+            if CostCenter.query.filter_by(code=code).first(): flash("Ο κωδικός έργου υπάρχει ήδη.", "danger")
             else:
-                db.session.add(CostCenter(
-                    code=code, 
-                    name=name,
-                    address=address,
-                    project_manager=project_manager,
-                    receiving_manager=receiving_manager,
-                    phone=phone
-                ))
+                db.session.add(CostCenter(code=code, name=name, address=address, project_manager=project_manager, receiving_manager=receiving_manager, phone=phone))
                 db.session.commit()
                 flash("Το έργο προστέθηκε επιτυχώς.", "success")
-        else:
-            flash("Συμπληρώστε τα υποχρεωτικά πεδία (Κωδικός και Περιγραφή).", "warning")
+        else: flash("Συμπληρώστε τα υποχρεωτικά πεδία.", "warning")
         return redirect(url_for('manage_cost_centers'))
-        
     cost_centers = CostCenter.query.order_by(CostCenter.code.asc()).all()
     return render_template("chief_cost_centers.html", cost_centers=cost_centers)
 
@@ -688,28 +769,20 @@ def toggle_cost_center(cc_id):
 @require_role("chief")
 def edit_cost_center(cc_id):
     cc = CostCenter.query.get_or_404(cc_id)
-    
     new_code = request.form.get("code").strip()
     new_name = request.form.get("name").strip()
-    
-    if not new_code or not new_name:
-        flash("Ο κωδικός και η περιγραφή είναι υποχρεωτικά.", "danger")
-        return redirect(url_for('manage_cost_centers'))
-        
     existing = CostCenter.query.filter_by(code=new_code).first()
     if existing and existing.id != cc.id:
-        flash("Ο κωδικός έργου χρησιμοποιείται ήδη σε άλλο έργο.", "danger")
+        flash("Ο κωδικός έργου χρησιμοποιείται ήδη.", "danger")
         return redirect(url_for('manage_cost_centers'))
-        
     cc.code = new_code
     cc.name = new_name
     cc.address = (request.form.get("address") or "").strip()
     cc.project_manager = (request.form.get("project_manager") or "").strip()
     cc.receiving_manager = (request.form.get("receiving_manager") or "").strip()
     cc.phone = (request.form.get("phone") or "").strip()
-    
     db.session.commit()
-    flash(f"Το έργο {cc.code} ενημερώθηκε επιτυχώς.", "success")
+    flash(f"Το έργο {cc.code} ενημερώθηκε.", "success")
     return redirect(url_for('manage_cost_centers'))
 
 @app.route("/supplier")
@@ -717,37 +790,22 @@ def edit_cost_center(cc_id):
 def supplier_dashboard():
     username = session.get("username")
     supplier_name = session.get("name")
-    
-    rfqs = RequestRFQ.query.filter_by(status="open").join(AllowedSupplier).filter(AllowedSupplier.supplier_username == username).all()
-    
+    rfqs = RequestRFQ.query.filter_by(status=RFQStatus.OPEN).join(AllowedSupplier).filter(AllowedSupplier.supplier_username == username).all()
     bids = Bid.query.filter_by(supplier_name=supplier_name).all()
     bids_map = {b.request_id: b for b in bids}
-    
     submitted_count = Bid.query.filter_by(supplier_name=supplier_name, status='submitted').count()
     
     awards_count = ItemAward.query.join(RequestRFQ).filter(
-        ItemAward.supplier_name == supplier_name,
-        RequestRFQ.status.in_(['closed', 'received'])
+        ItemAward.supplier_name == supplier_name, RequestRFQ.status.in_([RFQStatus.CLOSED, RFQStatus.RECEIVED])
     ).count()
-    
     awarded_awards = ItemAward.query.join(RequestRFQ).filter(
-        ItemAward.supplier_name == supplier_name,
-        RequestRFQ.status.in_(['closed', 'received'])
+        ItemAward.supplier_name == supplier_name, RequestRFQ.status.in_([RFQStatus.CLOSED, RFQStatus.RECEIVED])
     ).all()
-    
     awarded_rfqs = list({RequestRFQ.query.get(aw.request_id) for aw in awarded_awards})
     awarded_rfqs.sort(key=lambda x: x.id, reverse=True)
     
     pending_count = len(rfqs) - submitted_count
-
-    return render_template("supplier_dash.html", 
-                           rfqs=rfqs, 
-                           awarded_rfqs=awarded_rfqs,
-                           bids_map=bids_map,
-                           pending_count=max(0, pending_count),
-                           submitted_count=submitted_count,
-                           awards_count=awards_count)
-
+    return render_template("supplier_dash.html", rfqs=rfqs, awarded_rfqs=awarded_rfqs, bids_map=bids_map, pending_count=max(0, pending_count), submitted_count=submitted_count, awards_count=awards_count)
 
 @app.route("/supplier/history")
 @require_role("supplier")
@@ -765,58 +823,54 @@ def supplier_bid(req_id):
     
     current_user = User.query.filter_by(username=username).first()
     existing_bid = Bid.query.filter_by(request_id=req_id, supplier_id=current_user.id).first()
-    
-    is_rfq_closed = rfq.status in ['closed', 'received']
-    
-    is_locked = False
-    if is_rfq_closed or (existing_bid and ItemAward.query.filter_by(bid_id=existing_bid.id).first()):
-        is_locked = True
+    is_rfq_closed = rfq.status in [RFQStatus.CLOSED, RFQStatus.RECEIVED]
+    is_locked = is_rfq_closed or (existing_bid and ItemAward.query.filter_by(bid_id=existing_bid.id).first())
 
     if request.method == "POST":
         if is_locked:
-            flash("Η προσφορά είναι κλειδωμένη λόγω ανάθεσης.", "danger")
+            flash("Η προσφορά είναι κλειδωμένη.", "danger")
             return redirect(url_for('supplier_dashboard'))
 
         action = request.form.get("action")
-        
         if not existing_bid:
             existing_bid = Bid(request_id=rfq.id, supplier_id=current_user.id, supplier_name=supplier_name, price=0)
             db.session.add(existing_bid)
             db.session.flush()
         
+        # --- ΝΕΟ: Αποθήκευση Ανεβασμένου Αρχείου Προμηθευτή ---
+        file = request.files.get("document")
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            doc_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], doc_filename))
+            existing_bid.documents = doc_filename
+        # ------------------------------------------------------
+
         BidLine.query.filter_by(bid_id=existing_bid.id).delete()
-        
-        subtotal = Decimal(0)
-        total_vat = Decimal(0)
+        subtotal, total_vat = Decimal(0), Decimal(0)
 
         for item in rfq.items:
             price = Decimal(request.form.get(f"item_price_{item.id}") or 0)
             disc_val = Decimal(request.form.get(f"item_discount_{item.id}") or 0)
             disc_type = request.form.get(f"item_discount_type_{item.id}") or 'pct'
             vat_p = Decimal(request.form.get(f"item_vat_{item.id}") or 24)
-            
             line_gross = price * Decimal(item.quantity)
             line_net = line_gross * (1 - disc_val/100) if disc_type == 'pct' else max(0, line_gross - disc_val)
             
-            bl = BidLine(
-                bid_id=existing_bid.id, request_item_id=item.id,
-                description=item.description, unit=item.unit, qty=item.quantity,
-                unit_price=price, discount_pct=disc_val if disc_type == 'pct' else 0,
-                discount_amount=disc_val if disc_type == 'amt' else 0,
+            db.session.add(BidLine(
+                bid_id=existing_bid.id, request_item_id=item.id, description=item.description, unit=item.unit, qty=item.quantity,
+                unit_price=price, discount_pct=disc_val if disc_type == 'pct' else 0, discount_amount=disc_val if disc_type == 'amt' else 0,
                 discount_type=disc_type, vat_pct=vat_p, line_total=line_net, is_combo=False
-            )
-            db.session.add(bl)
+            ))
             subtotal += line_net
             total_vat += (line_net * vat_p / 100)
 
         ship_price = Decimal(request.form.get("shipping_cost") or 0)
         if ship_price > 0:
-            ship_line = BidLine(
-                bid_id=existing_bid.id, description="Μεταφορικά / Έξοδα Αποστολής",
-                qty=1, unit="υπηρεσία", unit_price=ship_price, line_total=ship_price,
-                vat_pct=24, is_combo=True 
-            )
-            db.session.add(ship_line)
+            db.session.add(BidLine(
+                bid_id=existing_bid.id, description="Μεταφορικά / Έξοδα Αποστολής", qty=1, unit="υπηρεσία", unit_price=ship_price, 
+                line_total=ship_price, vat_pct=24, is_combo=True 
+            ))
             subtotal += ship_price
             total_vat += (ship_price * Decimal(0.24))
 
@@ -830,18 +884,14 @@ def supplier_bid(req_id):
         existing_bid.vat_amount = total_vat
         existing_bid.price = subtotal - final_disc + total_vat
         existing_bid.status = 'submitted' if action == 'submit' else 'draft'
-        
         existing_bid.shipping_cost = ship_price
         existing_bid.notes = request.form.get("notes")
         
         prop_date = request.form.get("proposed_delivery_date")
         if prop_date:
-            try:
-                existing_bid.proposed_delivery_date = datetime.strptime(prop_date, "%Y-%m-%d")
-            except ValueError:
-                pass
+            try: existing_bid.proposed_delivery_date = datetime.strptime(prop_date, "%Y-%m-%d")
+            except ValueError: pass
 
-        # --> ΠΡΟΣΘΗΚΗ ΙΣΤΟΡΙΚΟΥ
         log_action(rfq.id, f"Ο προμηθευτής '{supplier_name}' {'υπέβαλε' if action == 'submit' else 'αποθήκευσε'} προσφορά.")
         db.session.commit()
         flash("Επιτυχής αποθήκευση προσφοράς.", "success")
@@ -852,22 +902,19 @@ def supplier_bid(req_id):
         for bl in existing_bid.lines:
             if not bl.is_combo:
                 item_prefill[bl.request_item_id] = {
-                    'price': bl.unit_price, 
-                    'disc': bl.discount_pct if bl.discount_type == 'pct' else bl.discount_amount,
-                    'disc_type': bl.discount_type,
-                    'vat': bl.vat_pct
+                    'price': bl.unit_price, 'disc': bl.discount_pct if bl.discount_type == 'pct' else bl.discount_amount,
+                    'disc_type': bl.discount_type, 'vat': bl.vat_pct
                 }
 
     my_awards = []
     my_awards_total = Decimal(0)
     overall_discount_amount = Decimal(0)
     final_award_total = Decimal(0)
-    receipts = {}  # ΝΕΟ: Λεξικό για τις παραλαβές
+    receipts = {}
     
     if is_rfq_closed and existing_bid:
         my_awards = ItemAward.query.filter_by(request_id=req_id, bid_id=existing_bid.id).all()
-        for aw in my_awards:
-            my_awards_total += (aw.line_total or Decimal(0))
+        for aw in my_awards: my_awards_total += (aw.line_total or Decimal(0))
             
         effective_disc_pct = Decimal(0)
         if existing_bid.subtotal and existing_bid.subtotal > 0 and existing_bid.discount_total and existing_bid.discount_total > 0:
@@ -876,22 +923,14 @@ def supplier_bid(req_id):
         overall_discount_amount = my_awards_total * effective_disc_pct
         final_award_total = my_awards_total - overall_discount_amount
 
-        # ΝΕΟ: Ανάκτηση των παραλαβών για να τις δει ο Προμηθευτής
         receipts_list = ItemReceipt.query.filter_by(request_id=req_id).all()
         receipts = {r.request_item_id: r for r in receipts_list}
 
     return render_template("supplier_bid.html", 
-                           rfq=rfq, bid=existing_bid, readonly=is_locked,
-                           item_prefill=item_prefill,
+                           rfq=rfq, bid=existing_bid, readonly=is_locked, item_prefill=item_prefill,
                            overall_prefill=existing_bid.overall_discount_pct if existing_bid and existing_bid.overall_discount_type == 'pct' else (existing_bid.discount_total if existing_bid else 0),
-                           discount_type=existing_bid.overall_discount_type if existing_bid else 'pct',
-                           shipping_prefill=existing_bid.shipping_cost if existing_bid else 0,
-                           my_awards=my_awards,
-                           my_awards_total=my_awards_total,
-                           overall_discount_amount=overall_discount_amount,
-                           final_award_total=final_award_total,
-                           is_rfq_closed=is_rfq_closed,
-                           receipts=receipts)
+                           discount_type=existing_bid.overall_discount_type if existing_bid else 'pct', shipping_prefill=existing_bid.shipping_cost if existing_bid else 0,
+                           my_awards=my_awards, my_awards_total=my_awards_total, overall_discount_amount=overall_discount_amount, final_award_total=final_award_total, is_rfq_closed=is_rfq_closed, receipts=receipts)
 
 def _has_column(table: str, column: str) -> bool:
     insp = inspect(db.engine)
@@ -900,7 +939,11 @@ def _has_column(table: str, column: str) -> bool:
 
 def migrate_db():
     with db.engine.begin() as conn:
-        pass # Απλά επιτρέπουμε να τρέξει χωρίς SQL edits γιατί το create_all πιάνει τα νέα Tables
+        if not _has_column("users", "approval_limit"):
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN approval_limit NUMERIC DEFAULT 500.00")
+        # ΝΕΟ: Προσθήκη εγγράφων στον προμηθευτή
+        if not _has_column("bids", "documents"):
+            conn.exec_driver_sql("ALTER TABLE bids ADD COLUMN documents VARCHAR(255)")
 
 def init_db():
     with app.app_context():

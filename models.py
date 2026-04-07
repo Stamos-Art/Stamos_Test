@@ -4,10 +4,18 @@ from decimal import Decimal
 
 db = SQLAlchemy()
 
+# --- ΣΤΑΘΕΡΕΣ ΓΙΑ ΤΙΣ ΚΑΤΑΣΤΑΣΕΙΣ (Pseudo-Enum) ---
+class RFQStatus:
+    PENDING = 'pending'
+    OPEN = 'open'
+    PENDING_FINAL_APPROVAL = 'pending_final_approval'
+    CLOSED = 'closed'
+    RECEIVED = 'received'
+    DENIED = 'denied'
+    CANCELLED = 'cancelled'
+# --------------------------------------------------
+
 class User(db.Model):
-    """
-    Μοντέλο Χρήστη: Διαχειρίζεται τα στοιχεία σύνδεσης και τους ρόλους (chief, company, supplier).
-    """
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -19,8 +27,8 @@ class User(db.Model):
     last_login_at = db.Column(db.DateTime, nullable=True)
     first_name = db.Column(db.String(120), nullable=True)
     last_name  = db.Column(db.String(120), nullable=True)
+    approval_limit = db.Column(db.Numeric(12, 2), default=500.00)
 
-    # Σχέση με τις προσφορές που έχει υποβάλει ο χρήστης (αν είναι προμηθευτής)
     bids = db.relationship("Bid", backref="supplier", lazy=True)
 
     def set_password(self, password: str):
@@ -32,9 +40,6 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 class SupplierProfile(db.Model):
-    """
-    Προφίλ Προμηθευτή: Επιπλέον επαγγελματικά στοιχεία για τους χρήστες με ρόλο 'supplier'.
-    """
     __tablename__ = "supplier_profiles"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), unique=True, nullable=False)
@@ -51,24 +56,17 @@ class SupplierProfile(db.Model):
     user = db.relationship("User", backref=db.backref("profile", uselist=False, cascade="all,delete"))
 
 class CostCenter(db.Model):
-    """
-    Κέντρο Κόστους / Έργο: Διαχείριση των διαθέσιμων έργων της εταιρείας.
-    """
     __tablename__ = "cost_centers"
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(200), nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
-    
-    address = db.Column(db.String(250), nullable=True)             # Διεύθυνση Έργου
-    project_manager = db.Column(db.String(120), nullable=True)     # Υπεύθυνος Έργου
-    receiving_manager = db.Column(db.String(120), nullable=True)   # Υπεύθυνος Παραλαβής
-    phone = db.Column(db.String(50), nullable=True)                # Τηλέφωνο
+    address = db.Column(db.String(250), nullable=True)
+    project_manager = db.Column(db.String(120), nullable=True)
+    receiving_manager = db.Column(db.String(120), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
 
 class RequestRFQ(db.Model):
-    """
-    Ζήτηση Προσφοράς (RFQ): Το κεντρικό έγγραφο που δημιουργεί η εταιρεία.
-    """
     __tablename__ = "requests"
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
@@ -76,33 +74,23 @@ class RequestRFQ(db.Model):
     documents = db.Column(db.String(255), nullable=True)
     created_by = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
     delivery_location = db.Column(db.String(255), nullable=True)
     receiving_manager = db.Column(db.String(120), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
-    
     submit_deadline = db.Column(db.DateTime, nullable=False)
     delivery_deadline = db.Column(db.DateTime, nullable=False)
-    status = db.Column(db.String(20), default='open') # pending, open, closed, denied
-    
+    status = db.Column(db.String(20), default=RFQStatus.OPEN)
     approved_by = db.Column(db.String(100), nullable=True)
     approved_at = db.Column(db.DateTime, nullable=True)
     denial_reason = db.Column(db.Text, nullable=True)
-    
     winning_bid_id = db.Column(db.Integer, db.ForeignKey('bids.id'), nullable=True)
     cost_center_id = db.Column(db.Integer, db.ForeignKey('cost_centers.id'), nullable=True)
-
-    # Σχέση με το Έργο
     cost_center = db.relationship('CostCenter', backref='rfqs')
-
     items = db.relationship('RequestItem', backref='rfq', lazy=True, cascade="all, delete-orphan")
     bids = db.relationship('Bid', backref='rfq', lazy=True, foreign_keys="[Bid.request_id]", cascade="all, delete-orphan")
     allowed_suppliers = db.relationship('AllowedSupplier', backref='rfq', lazy=True, cascade="all, delete-orphan")
 
 class RequestItem(db.Model):
-    """
-    Είδος Ζήτησης: Τα συγκεκριμένα υλικά ή υπηρεσίες που ζητούνται σε ένα RFQ.
-    """
     __tablename__ = "request_items"
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
@@ -111,33 +99,31 @@ class RequestItem(db.Model):
     quantity = db.Column(db.Numeric(12, 2), nullable=False)
 
 class Bid(db.Model):
-   
     __tablename__ = "bids"
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
-    supplier_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False) # Σύνδεση με το ID του χρήστη
-    supplier_name = db.Column(db.String(120), nullable=False) # Αντιγραφή ονόματος για ιστορικότητα
+    supplier_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    supplier_name = db.Column(db.String(120), nullable=False)
     price = db.Column(db.Numeric(12, 2), nullable=False)
     notes = db.Column(db.Text, nullable=True)
+    
+    # ΝΕΟ ΠΕΔΙΟ: Έγγραφα Προσφοράς
+    documents = db.Column(db.String(255), nullable=True)
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    status = db.Column(db.String(20), default='draft') 
     status = db.Column(db.String(20), default='draft') 
     overall_discount_type = db.Column(db.String(10), default='pct') 
     proposed_delivery_date = db.Column(db.DateTime, nullable=True) 
-   
     is_draft = db.Column(db.Boolean, default=False) 
-    
     subtotal = db.Column(db.Numeric(12, 2), nullable=True)
     discount_total = db.Column(db.Numeric(12, 2), nullable=True)
     overall_discount_pct = db.Column(db.Numeric(5, 2), nullable=True)
     shipping_cost = db.Column(db.Numeric(12, 2), nullable=True)
     vat_pct = db.Column(db.Numeric(5, 2), nullable=True)
     vat_amount = db.Column(db.Numeric(12, 2), nullable=True)
-    
     lines = db.relationship("BidLine", backref="bid", cascade="all, delete-orphan", lazy=True)
 
 class BidLine(db.Model):
-
     __tablename__ = "bid_lines"
     id = db.Column(db.Integer, primary_key=True)
     bid_id = db.Column(db.Integer, db.ForeignKey("bids.id"), nullable=False)
@@ -153,14 +139,9 @@ class BidLine(db.Model):
     merged_items = db.Column(db.Text, nullable=True)
     discount_type = db.Column(db.String(10), default='pct')
     vat_pct = db.Column(db.Numeric(5, 2), default=24)
-    
-    # Προσθήκη χρόνου παράδοσης ανά είδος
     delivery_days = db.Column(db.Integer, nullable=True)
 
 class ItemAward(db.Model):
-    """
-    Ανάθεση Είδους: Καταγραφή του νικητή προμηθευτή για κάθε είδος.
-    """
     __tablename__ = "item_awards"
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
@@ -175,9 +156,6 @@ class ItemAward(db.Model):
     bid = db.relationship("Bid", backref="item_awards", lazy=True)
 
 class ItemReceipt(db.Model):
-    """
-    Παραλαβή Είδους: Καταγραφή της φυσικής παραλαβής των υλικών.
-    """
     __tablename__ = "item_receipts"
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
@@ -188,9 +166,6 @@ class ItemReceipt(db.Model):
     received_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class AllowedSupplier(db.Model):
-    """
-    Επιτρεπόμενος Προμηθευτής: Πίνακας προσκλήσεων για συγκεκριμένες ζητήσεις.
-    """
     __tablename__ = "allowed_suppliers"
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
@@ -203,7 +178,6 @@ class ActionLog(db.Model):
     user_name = db.Column(db.String(100))
     action = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
     request = db.relationship('RequestRFQ', backref=db.backref('logs', lazy=True, order_by='ActionLog.created_at.desc()'))
 
 class Notification(db.Model):
@@ -214,6 +188,4 @@ class Notification(db.Model):
     link = db.Column(db.String(255))
     is_read = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
     user = db.relationship('User', backref=db.backref('notifications', lazy=True))
-
