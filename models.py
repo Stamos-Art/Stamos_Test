@@ -195,3 +195,25 @@ class AllowedSupplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     request_id = db.Column(db.Integer, db.ForeignKey("requests.id"), nullable=False)
     supplier_username = db.Column(db.String(100), nullable=False)
+
+class ActionLog(db.Model):
+    __tablename__ = 'action_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.Integer, db.ForeignKey('requests.id'))
+    user_name = db.Column(db.String(100))
+    action = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    request = db.relationship('RequestRFQ', backref=db.backref('logs', lazy=True, order_by='ActionLog.created_at.desc()'))
+
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    message = db.Column(db.String(255))
+    link = db.Column(db.String(255))
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('notifications', lazy=True))
+
