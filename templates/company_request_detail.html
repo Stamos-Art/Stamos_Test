@@ -177,6 +177,7 @@
     </div>
 </div>
 {% endif %}
+
 {% if awarded_summary %}
 <div class="card border-success shadow-sm mb-5">
     <div class="card-body">
@@ -210,7 +211,6 @@
     </div>
 </div>
 {% endif %}
-
 
 {% if session.get('role') == 'chief' and rfq.status == 'pending' %}
 <div class="card border-warning shadow-sm my-5">
@@ -391,6 +391,10 @@
     <a href="{{ url_for('new_request', clone_id=rfq.id) }}" class="btn btn-outline-info px-4 shadow-sm text-dark">
         <i class="bi bi-copy me-1"></i> Δημιουργία Αντιγράφου
     </a>
+    
+    <button type="button" class="btn btn-outline-secondary px-4 shadow-sm text-dark" data-bs-toggle="modal" data-bs-target="#auditModal">
+        <i class="bi bi-clock-history me-1"></i> Ιστορικό Ενεργειών
+    </button>
 
     <div class="ms-auto d-flex gap-2">
         <a href="{{ url_for('company_dashboard') }}" class="btn btn-outline-secondary px-4 shadow-sm">Επιστροφή</a>
@@ -514,5 +518,36 @@
   </div>
 </div>
 {% endif %}
+
+<div class="modal fade" id="auditModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content border-0 shadow">
+      <div class="modal-header bg-light">
+        <h5 class="modal-title fw-bold text-dark"><i class="bi bi-journal-text me-2"></i>Ιστορικό Ζήτησης #{{ rfq.id }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-0">
+        <ul class="list-group list-group-flush">
+            {% for log in rfq.logs %}
+            <li class="list-group-item p-3">
+                <div class="d-flex justify-content-between mb-1">
+                    <strong class="text-primary small"><i class="bi bi-person-fill me-1"></i>{{ log.user_name }}</strong>
+                    <span class="text-muted" style="font-size: 0.75rem;">{{ log.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
+                </div>
+                <p class="mb-0 text-dark small">{{ log.action }}</p>
+            </li>
+            {% else %}
+            <li class="list-group-item p-4 text-center text-muted">
+                Δεν βρέθηκαν καταγραφές ιστορικού για αυτή τη ζήτηση.
+            </li>
+            {% endfor %}
+        </ul>
+      </div>
+      <div class="modal-footer bg-light">
+        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Κλείσιμο</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 {% endblock %}

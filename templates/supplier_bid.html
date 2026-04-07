@@ -41,13 +41,17 @@
                         <thead class="table-success">
                             <tr>
                                 <th class="text-start ps-3">Περιγραφή Είδους</th>
-                                <th>Ποσότητα</th>
+                                <th>Ποσότητα (Παραγγελία)</th>
+                                <th>Παραλήφθηκε</th>
                                 <th>Τιμή Μον.</th>
                                 <th>Σύνολο Γραμμής (Καθαρό)</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for aw in my_awards %}
+                            {% set rec = receipts[aw.request_item_id] if receipts and aw.request_item_id in receipts else None %}
+                            {% set r_qty = rec.received_qty if rec and rec.received_qty else 0 %}
+                            {% set diff = aw.qty - r_qty %}
                             <tr>
                                 <td class="text-start ps-3 fw-bold">
                                     {% if not aw.request_item_id %}<i class="bi bi-truck me-2 text-primary"></i>{% endif %}
@@ -55,6 +59,20 @@
                                     {{ req_item.description if req_item else ("Μεταφορικά / Έξοδα Αποστολής" if not aw.request_item_id else "Άγνωστο Είδος") }}
                                 </td>
                                 <td>{{ "%.2f"|format(aw.qty) }}</td>
+                                
+                                <td>
+                                    {% if r_qty > 0 %}
+                                        <span class="text-success fw-bold">{{ "%.2f"|format(r_qty) }}</span>
+                                        {% if diff > 0 %}
+                                            <br><small class="text-danger">(Υπολείπονται: {{ "%.2f"|format(diff) }})</small>
+                                        {% else %}
+                                            <br><small class="text-muted"><i class="bi bi-check-all text-success"></i> Πλήρης</small>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+
                                 <td>{{ "%.2f"|format(aw.unit_price) }} €</td>
                                 <td class="fw-bold">{{ "%.2f"|format(aw.line_total) }} €</td>
                             </tr>
